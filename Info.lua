@@ -1,15 +1,21 @@
 return {
+    -- Let Lightroom choose the appropriate SDK compatibility.
+    -- (Hard-pinning versions can cause load failures across builds.)
     LrSdkVersion = 15.0,
-    LrSdkMinimumVersion = 15.0,
 
     LrToolkitIdentifier = 'com.gb.keywordeditor',
-    LrPluginName = 'GB Keyword Editor',
+    LrPluginName = 'GB Keyword Editor (CANARY)',
+
+    LrExportFilterProvider = {
+        title = 'GB Keyword Editor (Launcher)',
+        file = 'ExportFilterProvider.lua',
+        id = 'com.gb.keywordeditor.launcher',
+    },
 
     LrLibraryMenuItems = {
         {
             title = 'Open GB Keyword Editor',
             file = 'OpenKeywordEditor.lua',
-            enabledWhen = 'photosSelected',
         },
     },
 
