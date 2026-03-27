@@ -28,6 +28,7 @@ end
 local function rowVisibleKey(i) return 'row_' .. tostring(i) .. '_visible' end
 local function rowCountKey(i) return 'row_' .. tostring(i) .. '_count' end
 local function rowKeywordKey(i) return 'row_' .. tostring(i) .. '_keyword' end
+local function rowEditingKey(i) return 'row_' .. tostring(i) .. '_editing' end
 local function suggestionVisibleKey(i) return 'suggestion_' .. tostring(i) .. '_visible' end
 local function suggestionTitleKey(i) return 'suggestion_' .. tostring(i) .. '_title' end
 
@@ -96,26 +97,35 @@ local function syncRowsToProps(context)
 
     props.rows = rows
 
-    for i = 1, MAX_ROWS do
-        local row = rows[i]
-        props[rowVisibleKey(i)] = row and true or false
-        props[rowCountKey(i)] = row and tostring(row.count or '') or ''
-        props[rowKeywordKey(i)] = row and tostring(row.keyword or '') or ''
-    end
-
     if not props.currentRow or props.currentRow < 0 then
         props.currentRow = 0
     end
     if props.currentRow > #rows then
         props.currentRow = 0
     end
+
+    for i = 1, MAX_ROWS do
+        local row = rows[i]
+        props[rowVisibleKey(i)] = row and true or false
+        props[rowCountKey(i)] = row and tostring(row.count or '') or ''
+        props[rowKeywordKey(i)] = row and tostring(row.keyword or '') or ''
+        props[rowEditingKey(i)] = (row and props.currentRow == i) and true or false
+    end
 end
 
 local function setCurrentRow(context, index)
     local props = context.props
     local rows = context.rows or {}
+
+    if not index or index <= 0 then
+        props.currentRow = 0
+        syncRowsToProps(context)
+        return
+    end
+
     if not rows[index] then return end
     props.currentRow = index
+    syncRowsToProps(context)
 end
 
 local function refreshSuggestions(context)
@@ -183,9 +193,10 @@ local function observeCurrentRowKeyword(context)
     end)
 end
 
-local function applyKeywordToSelection(context, keywordName)
+local function applyKeywordToSelection(context, keywordName, opts)
     keywordName = trim(keywordName)
     if keywordName == '' then return end
+    opts = opts or {}
 
     LrTasks.startAsyncTask(function()
         local kw = KeywordService.findKeywordByName(context.catalog, keywordName)
@@ -223,11 +234,20 @@ local function applyKeywordToSelection(context, keywordName)
 
         -- Restore currentRow to the keyword that was just applied.
         local rows = context.rows or {}
+        local matchedIndex = 0
         for idx, row in ipairs(rows) do
             if row.keyword == keywordName then
-                context.props.currentRow = idx
+                matchedIndex = idx
                 break
             end
+        end
+
+        if opts.makeReadonly then
+            setCurrentRow(context, 0)
+            context.props.suggestionsDismissed = false
+            refreshSuggestions(context)
+        else
+            setCurrentRow(context, matchedIndex)
         end
     end)
 end
@@ -344,48 +364,74 @@ local function buildRowsView(f, context)
                         },
                     },
 
-                    f:static_text {
-                        width_in_chars = 3,
-                        title = bind(rowCountKey(capturedI)),
-                        alignment = 'right',
-                        mouse_down = function()
-                            setCurrentRow(context, capturedI)
-                            refreshSuggestions(context)
-                        end,
+                    f:view {
+                        width = 34,
+                        f:static_text {
+                            width_in_chars = 3,
+                            title = bind(rowCountKey(capturedI)),
+                            alignment = 'right',
+                        },
                     },
 
-                    f:edit_field {
-                        width_in_chars = 24,
-                        value = bind(rowKeywordKey(capturedI)),
-                        immediate = true,
-                        mouse_down = function()
-                            setCurrentRow(context, capturedI)
-                            context.props.suggestionsDismissed = false
-                            observeCurrentRowKeyword(context)
-                            refreshSuggestions(context)
-                        end,
-                        value_change = function(v)
-                            local row = context.rows and context.rows[capturedI]
-                            if row then
-                                row.keyword = v
-                                row.keywordRef = nil
-                            end
-                        end,
-                        action = function()
-                            setCurrentRow(context, capturedI)
-                            local row = context.rows and context.rows[capturedI]
-                            if row then
-                                applyKeywordToSelection(context, row.keyword)
-                            end
-                        end,
+                    f:view {
+                        width = 210,
+
+                        f:row {
+                            spacing = 0,
+
+                            f:view {
+                                bind_to_object = props,
+                                visible = bind(rowEditingKey(capturedI)),
+                                f:edit_field {
+                                    width_in_chars = 20,
+                                    value = bind(rowKeywordKey(capturedI)),
+                                    immediate = true,
+                                    mouse_down = function()
+                                        context.props.suggestionsDismissed = false
+                                        observeCurrentRowKeyword(context)
+                                        refreshSuggestions(context)
+                                    end,
+                                    value_change = function(v)
+                                        local row = context.rows and context.rows[capturedI]
+                                        if row then
+                                            row.keyword = v
+                                            row.keywordRef = nil
+                                        end
+                                    end,
+                                    action = function()
+                                        local row = context.rows and context.rows[capturedI]
+                                        if row then
+                                            applyKeywordToSelection(context, row.keyword, { makeReadonly = true })
+                                        end
+                                    end,
+                                },
+                            },
+
+                            f:view {
+                                bind_to_object = props,
+                                visible = bind {
+                                    keys = { rowEditingKey(capturedI) },
+                                    operation = function(values)
+                                        return not values[rowEditingKey(capturedI)]
+                                    end,
+                                },
+                                f:static_text {
+                                    width_in_chars = 20,
+                                    title = bind(rowKeywordKey(capturedI)),
+                                },
+                            },
+                        },
                     },
 
-                    f:push_button {
-                        title = 'X',
+                    f:view {
                         width = 24,
-                        action = function()
-                            deleteRow(context, capturedI)
-                        end,
+                        f:push_button {
+                            title = 'X',
+                            width = 22,
+                            action = function()
+                                deleteRow(context, capturedI)
+                            end,
+                        },
                     },
                 },
 
@@ -443,7 +489,7 @@ local function buildSuggestionsView(f, context)
                     props.suggestionsDismissed = false
                     syncRowsToProps(context)
                     refreshSuggestions(context)
-                    applyKeywordToSelection(context, name)
+                    applyKeywordToSelection(context, name, { makeReadonly = true })
                 end,
             },
         }
