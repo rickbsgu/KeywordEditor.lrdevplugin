@@ -41,7 +41,11 @@ LrTasks.startAsyncTask(function()
     local debugRows = {}
     for _, name in ipairs(union.names or {}) do
         local count = catalogCountsByName[name] or 0
-        initialRows[#initialRows + 1] = { keyword = name, count = count }
+        initialRows[#initialRows + 1] = {
+            keyword = name,
+            count = count,
+            keywordRef = union.keywordByName and union.keywordByName[name],
+        }
         debugRows[#debugRows + 1] = string.format('%s=%s', tostring(name), tostring(count))
     end
 

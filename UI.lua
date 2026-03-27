@@ -11,11 +11,66 @@ local PrefsService = require 'PrefsService'
 local okLogService, LogService = pcall(require, 'LogService')
 
 local UI = {}
+local loadRowsFromSelection
+
+local MAX_ROWS = 200
+local DEBUG_MAX_LINES = 80
+local ROW_VERTICAL_GAP = 6
+local KEYWORD_LIST_BG = LrColor(0.94, 0.94, 0.94)
+
+local function trim(s)
+    if not s then return '' end
+    s = tostring(s)
+    return (s:gsub('^%s+', ''):gsub('%s+$', ''))
+end
+
+local function rowVisibleKey(i) return 'row_' .. tostring(i) .. '_visible' end
+local function rowCountKey(i) return 'row_' .. tostring(i) .. '_count' end
+local function rowKeywordKey(i) return 'row_' .. tostring(i) .. '_keyword' end
+
+local function renderDebugText(context)
+    local header = (context and context._debugHeader) or ''
+    local lines = (context and context._debugLines) or {}
+    if #lines == 0 then
+        return header
+    end
+    if header == '' then
+        return table.concat(lines, '\n')
+    end
+    return header .. '\n\n' .. table.concat(lines, '\n')
+end
+
+local function setDebugHeader(context, header)
+    if not context then return end
+    context._debugHeader = header or ''
+    if context.props then
+        context.props.debugText = renderDebugText(context)
+    end
+end
+
+local function appendDebug(context, msg)
+    if not context then return end
+    if not context._debugLines then
+        context._debugLines = {}
+    end
+
+    context._debugLines[#context._debugLines + 1] = tostring(msg)
+    while #context._debugLines > DEBUG_MAX_LINES do
+        table.remove(context._debugLines, 1)
+    end
+
+    if context.props then
+        context.props.debugText = renderDebugText(context)
+    end
+end
 
 local function trace(context, msg)
+    appendDebug(context, msg)
+
     if not okLogService or not LogService or type(LogService.append) ~= 'function' then
         return
     end
+
     local logPath = '~/Library/Logs/Adobe/Lightroom/GBKeywordEditor.log'
     if _G and type(_G.GBKeywordEditorLogPath) == 'string' and _G.GBKeywordEditorLogPath ~= '' then
         logPath = _G.GBKeywordEditorLogPath
@@ -32,52 +87,38 @@ local function trace(context, msg)
     LogService.append(logPath, string.format('%s: %s', prefix, tostring(msg)))
 end
 
-local function trim(s)
-    if not s then return '' end
-    s = tostring(s)
-    return (s:gsub('^%s+', ''):gsub('%s+$', ''))
-end
-
-local function ensureRow(props)
-    if not props.rows then props.rows = {} end
-end
-
-local function addRow(props)
-    ensureRow(props)
-    local row = {
-        count = '',
-        keyword = '',
-    }
-    table.insert(props.rows, row)
-    props.currentRow = #props.rows
-end
-
-local function deleteRow(props, index)
-    if not props.rows or not props.rows[index] then return end
-    table.remove(props.rows, index)
-    props.currentRow = 0
-end
-
-local function setCurrentRow(props, index)
-    if not props.rows or not props.rows[index] then return end
-    props.currentRow = index
-end
-
-local function updateCountForRow(context)
+local function syncRowsToProps(context)
     local props = context.props
-    local rowIndex = props.currentRow
-    if not rowIndex or rowIndex <= 0 then return end
-    local row = props.rows[rowIndex]
-    if not row then return end
+    local rows = context.rows or {}
 
-    local count = KeywordService.countPhotosWithKeywordName(context.catalog, row.keyword)
-    row.count = tostring(count)
-    props.rows = props.rows
-    trace(context, string.format('updateCountForRow: %s -> %s', tostring(row.keyword), tostring(row.count)))
+    props.rows = rows
+
+    for i = 1, MAX_ROWS do
+        local row = rows[i]
+        props[rowVisibleKey(i)] = row and true or false
+        props[rowCountKey(i)] = row and tostring(row.count or '') or ''
+        props[rowKeywordKey(i)] = row and tostring(row.keyword or '') or ''
+    end
+
+    if not props.currentRow or props.currentRow < 0 then
+        props.currentRow = 0
+    end
+    if props.currentRow > #rows then
+        props.currentRow = 0
+    end
+end
+
+local function setCurrentRow(context, index)
+    local props = context.props
+    local rows = context.rows or {}
+    if not rows[index] then return end
+    props.currentRow = index
 end
 
 local function refreshSuggestions(context)
     local props = context.props
+    local rows = context.rows or {}
+
     if props.suggestionsDismissed then
         props.suggestions = {}
         return
@@ -88,7 +129,8 @@ local function refreshSuggestions(context)
         props.suggestions = {}
         return
     end
-    local row = props.rows[idx]
+
+    local row = rows[idx]
     if not row then
         props.suggestions = {}
         return
@@ -103,128 +145,246 @@ local function refreshSuggestions(context)
     props.suggestions = KeywordService.searchKeywordNames(prefix, context.allKeywordNames, 7)
 end
 
+local function updateCountForCurrentRow(context)
+    local props = context.props
+    local rows = context.rows or {}
+
+    local rowIndex = props.currentRow
+    if not rowIndex or rowIndex <= 0 then return end
+    local row = rows[rowIndex]
+    if not row then return end
+
+    local count = KeywordService.countPhotosWithKeywordName(context.catalog, row.keyword)
+    row.count = tostring(count)
+    syncRowsToProps(context)
+
+    trace(context, string.format('updateCountForCurrentRow: %s -> %s', tostring(row.keyword), tostring(row.count)))
+end
+
 local function applyKeywordToSelection(context, keywordName)
     keywordName = trim(keywordName)
     if keywordName == '' then return end
 
-    local kw = KeywordService.findKeywordByName(context.catalog, keywordName)
-    if not kw then
-        local btn = LrDialogs.confirm(
-            'Confirm New Keyword',
-            'Keyword "' .. keywordName .. '" does not exist. Create it?',
-            'Ok',
-            'Cancel'
-        )
-        if btn ~= 'ok' then
-            return
+    LrTasks.startAsyncTask(function()
+        local kw = KeywordService.findKeywordByName(context.catalog, keywordName)
+        if not kw then
+            local btn = LrDialogs.confirm(
+                'Confirm New Keyword',
+                'Keyword "' .. keywordName .. '" does not exist. Create it?',
+                'Ok',
+                'Cancel'
+            )
+            if btn ~= 'ok' then return end
+            kw = KeywordService.ensureKeywordExists(context.catalog, keywordName)
         end
-        kw = KeywordService.ensureKeywordExists(context.catalog, keywordName)
-    end
 
-    if not kw then
-        return
-    end
+        if not kw then return end
 
-    KeywordService.applyKeywordToPhotos(context.catalog, kw, context.targetPhotos)
-    RecentlyUsed.bump(context.recent, keywordName)
-    PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
-    updateCountForRow(context)
-    context.props.recentVersion = (context.props.recentVersion or 0) + 1
-    context.props.suggestions = {}
+        KeywordService.applyKeywordToPhotos(context.catalog, kw, context.targetPhotos)
+
+        local rowIndex = context.props.currentRow
+        if rowIndex and rowIndex > 0 and context.rows and context.rows[rowIndex] then
+            context.rows[rowIndex].keywordRef = kw
+            context.rows[rowIndex].keyword = keywordName
+        end
+
+        RecentlyUsed.bump(context.recent, keywordName)
+        PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
+
+        updateCountForCurrentRow(context)
+        context.props.recentVersion = (context.props.recentVersion or 0) + 1
+        context.props.suggestions = {}
+
+        syncRowsToProps(context)
+    end)
 end
 
-local function loadRowsFromSelection(context)
-    local props = context.props
-    local rows = context.initialRows
-    if not rows then
-        -- Fallback (no counts): just list union names.
-        local photos = context.targetPhotos or {}
-        local data = KeywordService.getKeywordNameUnionForPhotos(photos)
-        rows = {}
-        for _, name in ipairs(data.names) do
-            rows[#rows + 1] = { count = '', keyword = name }
+local function addRow(context)
+    if not context.rows then context.rows = {} end
+
+    context.rows[#context.rows + 1] = {
+        count = '',
+        keyword = '',
+        keywordRef = nil,
+    }
+
+    context.props.currentRow = #context.rows
+    context.props.suggestionsDismissed = false
+
+    syncRowsToProps(context)
+    refreshSuggestions(context)
+end
+
+local function deleteRow(context, index)
+    local rows = context.rows or {}
+    local row = rows[index]
+    if not row then return end
+
+    -- Optimistic UI update so the row disappears immediately.
+    local keywordName = trim(row.keyword)
+    table.remove(rows, index)
+    context.rows = rows
+    context.props.currentRow = 0
+    context.props.suggestions = {}
+    context.props.suggestionsDismissed = false
+    syncRowsToProps(context)
+
+    LrTasks.startAsyncTask(function()
+        local kw = row.keywordRef
+
+        if not kw and keywordName ~= '' then
+            kw = KeywordService.findKeywordByName(context.catalog, keywordName)
+        end
+
+        if kw then
+            KeywordService.removeKeywordFromPhotos(context.catalog, kw, context.targetPhotos)
+            trace(context, string.format('delete-row applied for %s', tostring(keywordName)))
+        else
+            trace(context, string.format('delete-row could not resolve keyword for %s', tostring(keywordName)))
+        end
+
+        -- Reconcile rows from fresh selected-photo state after deletion.
+        context.targetPhotos = context.catalog:getTargetPhotos() or context.targetPhotos
+        context.initialRows = nil
+        loadRowsFromSelection(context)
+        syncRowsToProps(context)
+    end)
+end
+
+loadRowsFromSelection = function(context)
+    local rows = {}
+
+    if context.initialRows and #context.initialRows > 0 then
+        for _, r in ipairs(context.initialRows) do
+            local keyword = r.keyword or r.name or ''
+            local count = r.count
+            if count == nil then count = '' end
+
+            rows[#rows + 1] = {
+                keyword = keyword,
+                count = tostring(count),
+                keywordRef = r.keywordRef,
+            }
         end
     else
-        -- Normalize rows coming from task precomputation.
-        -- Expected UI row shape is { keyword = <string>, count = <string|number> }.
-        local normalized = {}
-        for _, r in ipairs(rows) do
-            if type(r) == 'table' then
-                local keyword = r.keyword or r.name or ''
-                local count = r.count
-                if count == nil then count = '' end
-                normalized[#normalized + 1] = { keyword = keyword, count = tostring(count) }
-            end
+        local data = KeywordService.getKeywordNameUnionForPhotos(context.targetPhotos or {})
+        local countsByName = KeywordService.getCatalogKeywordCountsByName(context.catalog, data.names or {})
+
+        for _, name in ipairs(data.names or {}) do
+            rows[#rows + 1] = {
+                keyword = name,
+                count = tostring(countsByName[name] or 0),
+                keywordRef = data.keywordByName and data.keywordByName[name],
+            }
         end
-        rows = normalized
     end
 
-    props.rows = rows
-    props.currentRow = (#rows > 0) and 1 or 0
+    context.rows = rows
+    syncRowsToProps(context)
     refreshSuggestions(context)
 end
 
 local function buildRowsView(f, context)
     local props = context.props
+    local bind = LrView.bind
 
     local children = {}
+    for i = 1, MAX_ROWS do
+        children[#children + 1] = f:view {
+            bind_to_object = props,
+            visible = bind(rowVisibleKey(i)),
 
-    for i, row in ipairs(props.rows or {}) do
-        children[#children + 1] = f:row {
-            spacing = 2,
+            f:column {
+                spacing = 0,
 
-            f:static_text {
-                width_in_chars = 1,
-                title = (props.currentRow == i) and '>' or ' ',
-            },
+                f:row {
+                    spacing = 2,
 
-            f:static_text {
-                width_in_chars = 3,
-                title = row.count or '',
-                alignment = 'right',
-                mouse_down = function()
-                    setCurrentRow(props, i)
-                end,
-            },
+                    f:static_text {
+                        width_in_chars = 1,
+                        title = bind {
+                            keys = { 'currentRow' },
+                            operation = function(values)
+                                return (tonumber(values.currentRow) == i) and '>' or ' '
+                            end,
+                        },
+                    },
 
-            f:edit_field {
-                width_in_chars = 24,
-                value = row.keyword or '',
-                immediate = true,
-                mouse_down = function()
-                    setCurrentRow(props, i)
-                    props.suggestionsDismissed = false
-                    refreshSuggestions(context)
-                end,
-                value_change = function(v)
-                    row.keyword = v
-                    refreshSuggestions(context)
-                end,
-                action = function()
-                    applyKeywordToSelection(context, row.keyword)
-                end,
-            },
+                    f:static_text {
+                        width_in_chars = 3,
+                        title = bind(rowCountKey(i)),
+                        alignment = 'right',
+                        mouse_down = function()
+                            setCurrentRow(context, i)
+                            refreshSuggestions(context)
+                        end,
+                    },
 
-            f:push_button {
-                title = 'X',
-                width = 24,
-                action = function()
-                    deleteRow(props, i)
-                end,
+                    f:edit_field {
+                        width_in_chars = 24,
+                        value = bind(rowKeywordKey(i)),
+                        immediate = true,
+                        mouse_down = function()
+                            setCurrentRow(context, i)
+                            context.props.suggestionsDismissed = false
+                            refreshSuggestions(context)
+                        end,
+                        value_change = function(v)
+                            local row = context.rows and context.rows[i]
+                            if not row then return end
+
+                            row.keyword = v
+                            row.keywordRef = nil
+                            syncRowsToProps(context)
+                            refreshSuggestions(context)
+                        end,
+                        action = function()
+                            setCurrentRow(context, i)
+                            local row = context.rows and context.rows[i]
+                            if row then
+                                applyKeywordToSelection(context, row.keyword)
+                            end
+                        end,
+                    },
+
+                    f:push_button {
+                        title = 'X',
+                        width = 24,
+                        action = function()
+                            deleteRow(context, i)
+                        end,
+                    },
+                },
+
+                f:spacer { height = ROW_VERTICAL_GAP },
             },
         }
     end
 
-    return f:column {
-        spacing = f:control_spacing(),
-        unpack(children),
+    return f:scrolled_view {
+        height = 220,
+        width = 600,
+        horizontal_scroller = false,
+        vertical_scroller = true,
+        background_color = KEYWORD_LIST_BG,
+
+        f:view {
+            background_color = KEYWORD_LIST_BG,
+
+            f:column {
+                -- Hidden slot views still participate in column spacing in some LR builds.
+                -- Keep spacing at 0 so invisible rows don't consume vertical layout.
+                spacing = 0,
+                unpack(children),
+            },
+        },
     }
 end
 
 local function buildSuggestionsView(f, context)
     local props = context.props
-
     local children = {}
+
     if props.suggestionsDismissed then
         children[#children + 1] = f:row {
             spacing = f:control_spacing(),
@@ -251,8 +411,11 @@ local function buildSuggestionsView(f, context)
             action = function()
                 local idx = props.currentRow
                 if not idx or idx <= 0 then return end
-                if not props.rows or not props.rows[idx] then return end
-                props.rows[idx].keyword = name
+                if not context.rows or not context.rows[idx] then return end
+
+                context.rows[idx].keyword = name
+                context.rows[idx].keywordRef = nil
+                syncRowsToProps(context)
                 refreshSuggestions(context)
             end,
         }
@@ -271,23 +434,29 @@ end
 
 local function buildRecentView(f, context)
     local props = context.props
-
     local children = {}
+
     for _, name in ipairs(RecentlyUsed.getNames(context.recent)) do
         children[#children + 1] = f:push_button {
             title = name,
             action = function()
                 local idx = props.currentRow
                 if not idx or idx <= 0 then return end
-                if not props.rows or not props.rows[idx] then return end
+                if not context.rows or not context.rows[idx] then return end
 
-                props.rows[idx].keyword = name
+                context.rows[idx].keyword = name
+                context.rows[idx].keywordRef = nil
                 RecentlyUsed.bump(context.recent, name)
                 PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
                 props.recentVersion = (props.recentVersion or 0) + 1
+                syncRowsToProps(context)
                 applyKeywordToSelection(context, name)
             end,
         }
+    end
+
+    if #children == 0 then
+        children[#children + 1] = f:static_text { title = 'No recent keywords yet' }
     end
 
     return f:row { spacing = f:control_spacing(), unpack(children) }
@@ -295,47 +464,60 @@ end
 
 function UI.showEditor(context)
     LrFunctionContext.callWithContext('GBKeywordEditor', function(fc)
-        trace(context, 'showEditor: begin')
-        local f = LrView.osFactory()
-        local props = LrBinding.makePropertyTable(fc)
+        context._debugLines = {}
+        context._debugHeader = ''
 
-        context.props = props
+        trace(context, 'showEditor: begin')
+
         context.recent = RecentlyUsed.new(10)
         context.toolkitId = context.toolkitId or 'com.gb.keywordeditor.dev2'
         RecentlyUsed.loadInto(context.recent, PrefsService.loadRecent(context.toolkitId))
         context.allKeywordNames = KeywordService.getAllKeywordNames(context.catalog)
         trace(context, string.format('showEditor: loaded %d keyword names', context.allKeywordNames and #context.allKeywordNames or 0))
 
-        props.rows = {}
+        local f = LrView.osFactory()
+        local bind = LrView.bind
+        local props = LrBinding.makePropertyTable(fc)
+        context.props = props
+
         props.currentRow = 0
         props.recentVersion = 0
         props.suggestions = {}
-        props.suggestionsVersion = 0
         props.suggestionsDismissed = false
+        props.debugText = ''
 
         loadRowsFromSelection(context)
-        trace(context, string.format('showEditor: rows=%d currentRow=%d', props.rows and #props.rows or 0, tonumber(props.currentRow) or 0))
+        trace(context, string.format('showEditor: rows=%d currentRow=%d', context.rows and #context.rows or 0, tonumber(props.currentRow) or 0))
 
-        local function buildDebugText()
+        local function buildDebugHeader()
             local lines = {}
             lines[#lines + 1] = 'DEBUG:'
-
             lines[#lines + 1] = string.format('Selected photos: %s', tostring(context.targetPhotos and #context.targetPhotos or 0))
             lines[#lines + 1] = string.format('Initial rows: %s', tostring(context.initialRows and #context.initialRows or 0))
             lines[#lines + 1] = string.format('catalog.findPhotos type: %s (must be called in LrTask)', tostring(type(context.catalog.findPhotos)))
-
-            return table.concat(lines, '\n')
+            return (context.debugText and (context.debugText .. '\n\n' .. table.concat(lines, '\n'))) or table.concat(lines, '\n')
         end
+
+        setDebugHeader(context, buildDebugHeader())
+        appendDebug(context, 'debug channel active')
 
         local content = f:column {
             spacing = f:control_spacing(),
             fill_horizontal = 1,
 
-            f:edit_field {
-                value = (context.debugText and (context.debugText .. '\n\n' .. buildDebugText())) or buildDebugText(),
-                width_in_chars = 70,
-                height_in_lines = 10,
-                tooltip = 'Debug output (temporary). You can select/copy this text.',
+            f:scrolled_view {
+                width = 700,
+                height = 160,
+                horizontal_scroller = true,
+                vertical_scroller = true,
+
+                f:edit_field {
+                    bind_to_object = props,
+                    value = bind 'debugText',
+                    width_in_chars = 90,
+                    height_in_lines = 30,
+                    tooltip = 'Debug output (temporary). You can select/copy this text.',
+                },
             },
 
             f:row {
@@ -344,10 +526,7 @@ function UI.showEditor(context)
                 f:push_button {
                     title = 'Create Keyword',
                     action = function()
-                        addRow(props)
-                        props.rows = props.rows
-                        props.suggestionsDismissed = false
-                        refreshSuggestions(context)
+                        addRow(context)
                     end,
                 },
             },
@@ -382,7 +561,6 @@ function UI.showEditor(context)
         }
 
         trace(context, string.format('showEditor: dialog closed result=%s', tostring(result)))
-
         return result
     end)
 end

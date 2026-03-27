@@ -108,6 +108,16 @@ function KeywordService.applyKeywordToPhotos(catalog, keyword, photos)
     end)
 end
 
+function KeywordService.removeKeywordFromPhotos(catalog, keyword, photos)
+    if not keyword or not photos or #photos == 0 then return end
+
+    catalog:withWriteAccessDo('Remove Keyword', function()
+        for _, photo in ipairs(photos) do
+            photo:removeKeyword(keyword)
+        end
+    end)
+end
+
 function KeywordService.countPhotosWithKeyword(catalog, keyword)
     if not keyword then return 0 end
     local photos = keyword:getPhotos()
