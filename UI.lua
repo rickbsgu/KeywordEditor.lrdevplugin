@@ -516,7 +516,10 @@ local function buildSuggestionsView(f, context)
                     },
                 },
 
-                unpack(slots),
+                f:row {
+                    spacing = f:control_spacing(),
+                    unpack(slots),
+                },
             },
         },
 
@@ -547,6 +550,13 @@ local function buildRecentView(f, context)
             title = name,
             action = function()
                 local idx = props.currentRow
+
+                -- Mode 1: no active create row -> create one first.
+                if not idx or idx <= 0 then
+                    addRow(context)
+                    idx = props.currentRow
+                end
+
                 if not idx or idx <= 0 then return end
                 if not context.rows or not context.rows[idx] then return end
 
@@ -556,7 +566,10 @@ local function buildRecentView(f, context)
                 PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
                 props.recentVersion = (props.recentVersion or 0) + 1
                 syncRowsToProps(context)
-                applyKeywordToSelection(context, name)
+
+                -- Mode 2 (already in create row) and Mode 1 (just created row):
+                -- treat recent-click like accepted suggestion.
+                applyKeywordToSelection(context, name, { makeReadonly = true })
             end,
         }
     end
