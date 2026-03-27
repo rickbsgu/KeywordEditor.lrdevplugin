@@ -14,6 +14,7 @@ local UI = {}
 local loadRowsFromSelection
 
 local MAX_ROWS = 200
+local MAX_SUGGESTIONS = 7
 local DEBUG_MAX_LINES = 80
 local ROW_VERTICAL_GAP = 6
 local KEYWORD_LIST_BG = LrColor(0.94, 0.94, 0.94)
@@ -27,6 +28,8 @@ end
 local function rowVisibleKey(i) return 'row_' .. tostring(i) .. '_visible' end
 local function rowCountKey(i) return 'row_' .. tostring(i) .. '_count' end
 local function rowKeywordKey(i) return 'row_' .. tostring(i) .. '_keyword' end
+local function suggestionVisibleKey(i) return 'suggestion_' .. tostring(i) .. '_visible' end
+local function suggestionTitleKey(i) return 'suggestion_' .. tostring(i) .. '_title' end
 
 local function renderDebugText(context)
     local header = (context and context._debugHeader) or ''
@@ -119,46 +122,65 @@ local function refreshSuggestions(context)
     local props = context.props
     local rows = context.rows or {}
 
+    local function clearSlots()
+        for i = 1, MAX_SUGGESTIONS do
+            props[suggestionVisibleKey(i)] = false
+            props[suggestionTitleKey(i)] = ''
+        end
+        props.hasSuggestions = false
+        props.showSuggestions = false
+    end
+
     if props.suggestionsDismissed then
-        props.suggestions = {}
+        clearSlots()
         return
     end
 
     local idx = props.currentRow
     if not idx or idx <= 0 then
-        props.suggestions = {}
+        clearSlots()
         return
     end
 
-    local row = rows[idx]
-    if not row then
-        props.suggestions = {}
-        return
-    end
-
-    local prefix = trim(row.keyword)
+    -- Read from bound property, not context.rows (binding is the source of truth)
+    local prefix = trim(props[rowKeywordKey(idx)] or '')
     if prefix == '' then
-        props.suggestions = {}
+        clearSlots()
         return
     end
 
-    props.suggestions = KeywordService.searchKeywordNames(prefix, context.allKeywordNames, 7)
+    local matches = KeywordService.searchKeywordNames(prefix, context.allKeywordNames, MAX_SUGGESTIONS)
+    for i = 1, MAX_SUGGESTIONS do
+        local name = matches[i]
+        props[suggestionVisibleKey(i)] = (name ~= nil)
+        props[suggestionTitleKey(i)] = name or ''
+    end
+    local hasAny = (#matches > 0)
+    props.hasSuggestions = hasAny
+    props.showSuggestions = hasAny
+    trace(context, string.format('suggestions: prefix="%s" matches=%d [%s]', prefix, #matches, table.concat(matches, ', ')))
 end
 
-local function updateCountForCurrentRow(context)
+local function observeCurrentRowKeyword(context)
     local props = context.props
-    local rows = context.rows or {}
+    local rowIndex = tonumber(props.currentRow) or 0
 
-    local rowIndex = props.currentRow
-    if not rowIndex or rowIndex <= 0 then return end
-    local row = rows[rowIndex]
-    if not row then return end
+    if rowIndex <= 0 then
+        return
+    end
 
-    local count = KeywordService.countPhotosWithKeywordName(context.catalog, row.keyword)
-    row.count = tostring(count)
-    syncRowsToProps(context)
+    context._suggestionObserverRows = context._suggestionObserverRows or {}
+    if context._suggestionObserverRows[rowIndex] then
+        return
+    end
 
-    trace(context, string.format('updateCountForCurrentRow: %s -> %s', tostring(row.keyword), tostring(row.count)))
+    context._suggestionObserverRows[rowIndex] = true
+    props:addObserver(rowKeywordKey(rowIndex), function()
+        if (tonumber(props.currentRow) or 0) ~= rowIndex then
+            return
+        end
+        refreshSuggestions(context)
+    end)
 end
 
 local function applyKeywordToSelection(context, keywordName)
@@ -176,26 +198,37 @@ local function applyKeywordToSelection(context, keywordName)
             )
             if btn ~= 'ok' then return end
             kw = KeywordService.ensureKeywordExists(context.catalog, keywordName)
+            if kw then
+                -- Refresh so future completions include the newly created keyword.
+                context.allKeywordNames = KeywordService.getAllKeywordNames(context.catalog)
+            end
         end
 
-        if not kw then return end
+        if not kw then
+            trace(context, string.format('applyKeyword: could not find or create "%s"', keywordName))
+            return
+        end
 
         KeywordService.applyKeywordToPhotos(context.catalog, kw, context.targetPhotos)
-
-        local rowIndex = context.props.currentRow
-        if rowIndex and rowIndex > 0 and context.rows and context.rows[rowIndex] then
-            context.rows[rowIndex].keywordRef = kw
-            context.rows[rowIndex].keyword = keywordName
-        end
+        trace(context, string.format('applyKeyword: applied "%s" to %d selected photos',
+            keywordName, #(context.targetPhotos or {})))
 
         RecentlyUsed.bump(context.recent, keywordName)
         PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
-
-        updateCountForCurrentRow(context)
         context.props.recentVersion = (context.props.recentVersion or 0) + 1
-        context.props.suggestions = {}
 
-        syncRowsToProps(context)
+        -- Reload rows from fresh catalog state (deduplicates, updates all counts).
+        context.initialRows = nil
+        loadRowsFromSelection(context)
+
+        -- Restore currentRow to the keyword that was just applied.
+        local rows = context.rows or {}
+        for idx, row in ipairs(rows) do
+            if row.keyword == keywordName then
+                context.props.currentRow = idx
+                break
+            end
+        end
     end)
 end
 
@@ -225,9 +258,9 @@ local function deleteRow(context, index)
     table.remove(rows, index)
     context.rows = rows
     context.props.currentRow = 0
-    context.props.suggestions = {}
     context.props.suggestionsDismissed = false
     syncRowsToProps(context)
+    refreshSuggestions(context)
 
     LrTasks.startAsyncTask(function()
         local kw = row.keywordRef
@@ -290,9 +323,10 @@ local function buildRowsView(f, context)
 
     local children = {}
     for i = 1, MAX_ROWS do
+        local capturedI = i
         children[#children + 1] = f:view {
             bind_to_object = props,
-            visible = bind(rowVisibleKey(i)),
+            visible = bind(rowVisibleKey(capturedI)),
 
             f:column {
                 spacing = 0,
@@ -305,42 +339,41 @@ local function buildRowsView(f, context)
                         title = bind {
                             keys = { 'currentRow' },
                             operation = function(values)
-                                return (tonumber(values.currentRow) == i) and '>' or ' '
+                                return (tonumber(values.currentRow) == capturedI) and '>' or ' '
                             end,
                         },
                     },
 
                     f:static_text {
                         width_in_chars = 3,
-                        title = bind(rowCountKey(i)),
+                        title = bind(rowCountKey(capturedI)),
                         alignment = 'right',
                         mouse_down = function()
-                            setCurrentRow(context, i)
+                            setCurrentRow(context, capturedI)
                             refreshSuggestions(context)
                         end,
                     },
 
                     f:edit_field {
                         width_in_chars = 24,
-                        value = bind(rowKeywordKey(i)),
+                        value = bind(rowKeywordKey(capturedI)),
                         immediate = true,
                         mouse_down = function()
-                            setCurrentRow(context, i)
+                            setCurrentRow(context, capturedI)
                             context.props.suggestionsDismissed = false
+                            observeCurrentRowKeyword(context)
                             refreshSuggestions(context)
                         end,
                         value_change = function(v)
-                            local row = context.rows and context.rows[i]
-                            if not row then return end
-
-                            row.keyword = v
-                            row.keywordRef = nil
-                            syncRowsToProps(context)
-                            refreshSuggestions(context)
+                            local row = context.rows and context.rows[capturedI]
+                            if row then
+                                row.keyword = v
+                                row.keywordRef = nil
+                            end
                         end,
                         action = function()
-                            setCurrentRow(context, i)
-                            local row = context.rows and context.rows[i]
+                            setCurrentRow(context, capturedI)
+                            local row = context.rows and context.rows[capturedI]
                             if row then
                                 applyKeywordToSelection(context, row.keyword)
                             end
@@ -351,7 +384,7 @@ local function buildRowsView(f, context)
                         title = 'X',
                         width = 24,
                         action = function()
-                            deleteRow(context, i)
+                            deleteRow(context, capturedI)
                         end,
                     },
                 },
@@ -383,53 +416,80 @@ end
 
 local function buildSuggestionsView(f, context)
     local props = context.props
-    local children = {}
+    local bind = LrView.bind
 
-    if props.suggestionsDismissed then
-        children[#children + 1] = f:row {
-            spacing = f:control_spacing(),
-            f:static_text { title = 'Suggestions dismissed' },
-            f:push_button {
-                title = 'Show',
-                action = function()
+    -- Each slot is an f:view (supports visible binding) containing a
+    -- static_text (supports title binding). Both patterns are proven
+    -- in buildRowsView.
+    local slots = {}
+    for i = 1, MAX_SUGGESTIONS do
+        local capturedI = i
+        slots[#slots + 1] = f:view {
+            bind_to_object = props,
+            visible = bind(suggestionVisibleKey(i)),
+            f:static_text {
+                title = bind(suggestionTitleKey(i)),
+                mouse_down = function()
+                    local idx = props.currentRow
+                    if not idx or idx <= 0 then return end
+                    if not context.rows or not context.rows[idx] then return end
+
+                    local name = props[suggestionTitleKey(capturedI)]
+                    if not name or name == '' then return end
+
+                    context.rows[idx].keyword = name
+                    context.rows[idx].keywordRef = nil
+                    context.rows[idx].count = ''
                     props.suggestionsDismissed = false
+                    syncRowsToProps(context)
                     refreshSuggestions(context)
+                    applyKeywordToSelection(context, name)
                 end,
             },
         }
-        return f:column { spacing = f:control_spacing(), unpack(children) }
     end
 
-    if not props.suggestions or #props.suggestions == 0 then
-        return f:column { spacing = f:control_spacing(), f:static_text { title = '' } }
-    end
+    return f:column {
+        spacing = f:control_spacing(),
 
-    children[#children + 1] = f:static_text { title = 'Suggestions:' }
-    for _, name in ipairs(props.suggestions) do
-        children[#children + 1] = f:push_button {
-            title = name,
-            action = function()
-                local idx = props.currentRow
-                if not idx or idx <= 0 then return end
-                if not context.rows or not context.rows[idx] then return end
+        f:view {
+            bind_to_object = props,
+            visible = bind 'showSuggestions',
+            f:column {
+                spacing = 2,
 
-                context.rows[idx].keyword = name
-                context.rows[idx].keywordRef = nil
-                syncRowsToProps(context)
-                refreshSuggestions(context)
-            end,
-        }
-    end
+                f:row {
+                    spacing = f:control_spacing(),
+                    f:static_text { title = 'Suggestions:' },
+                    f:push_button {
+                        title = 'Dismiss',
+                        action = function()
+                            props.suggestionsDismissed = true
+                            props.showSuggestions = false
+                        end,
+                    },
+                },
 
-    children[#children + 1] = f:push_button {
-        title = 'Dismiss',
-        action = function()
-            props.suggestionsDismissed = true
-            props.suggestions = {}
-        end,
+                unpack(slots),
+            },
+        },
+
+        f:view {
+            bind_to_object = props,
+            visible = bind 'suggestionsDismissed',
+            f:row {
+                spacing = f:control_spacing(),
+                f:static_text { title = 'Suggestions dismissed.' },
+                f:push_button {
+                    title = 'Show',
+                    action = function()
+                        props.suggestionsDismissed = false
+                        refreshSuggestions(context)
+                    end,
+                },
+            },
+        },
     }
-
-    return f:column { spacing = f:control_spacing(), unpack(children) }
 end
 
 local function buildRecentView(f, context)
@@ -482,20 +542,25 @@ function UI.showEditor(context)
 
         props.currentRow = 0
         props.recentVersion = 0
-        props.suggestions = {}
         props.suggestionsDismissed = false
+        props.hasSuggestions = false
+        props.showSuggestions = false
         props.debugText = ''
+        for i = 1, MAX_SUGGESTIONS do
+            props[suggestionVisibleKey(i)] = false
+            props[suggestionTitleKey(i)] = ''
+        end
 
         loadRowsFromSelection(context)
         trace(context, string.format('showEditor: rows=%d currentRow=%d', context.rows and #context.rows or 0, tonumber(props.currentRow) or 0))
 
+        props:addObserver('currentRow', function()
+            observeCurrentRowKeyword(context)
+            refreshSuggestions(context)
+        end)
+
         local function buildDebugHeader()
-            local lines = {}
-            lines[#lines + 1] = 'DEBUG:'
-            lines[#lines + 1] = string.format('Selected photos: %s', tostring(context.targetPhotos and #context.targetPhotos or 0))
-            lines[#lines + 1] = string.format('Initial rows: %s', tostring(context.initialRows and #context.initialRows or 0))
-            lines[#lines + 1] = string.format('catalog.findPhotos type: %s (must be called in LrTask)', tostring(type(context.catalog.findPhotos)))
-            return (context.debugText and (context.debugText .. '\n\n' .. table.concat(lines, '\n'))) or table.concat(lines, '\n')
+            return '=== TRACE OUTPUT ==='
         end
 
         setDebugHeader(context, buildDebugHeader())

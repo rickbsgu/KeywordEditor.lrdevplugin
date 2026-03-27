@@ -187,13 +187,48 @@ function KeywordService.searchKeywordNames(prefix, allNames, limit)
     limit = limit or 7
     local lowerPrefix = prefix:lower()
 
+    local function isWordPrefixMatch(name)
+        local lowerName = name:lower()
+        local startPos = 1
+
+        while true do
+            local foundAt = lowerName:find(lowerPrefix, startPos, true)
+            if not foundAt then
+                return false
+            end
+
+            if foundAt == 1 then
+                return true
+            end
+
+            local prev = lowerName:sub(foundAt - 1, foundAt - 1)
+            if not prev:match('[%w]') then
+                return true
+            end
+
+            startPos = foundAt + 1
+        end
+    end
+
     local matches = {}
+    local seen = {}
+
     for _, name in ipairs(allNames) do
         if #matches >= limit then break end
         if name:lower():find(lowerPrefix, 1, true) == 1 then
             matches[#matches + 1] = name
+            seen[name] = true
         end
     end
+
+    for _, name in ipairs(allNames) do
+        if #matches >= limit then break end
+        if not seen[name] and isWordPrefixMatch(name) then
+            matches[#matches + 1] = name
+            seen[name] = true
+        end
+    end
+
     return matches
 end
 

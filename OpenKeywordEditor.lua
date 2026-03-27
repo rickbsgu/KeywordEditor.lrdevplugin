@@ -38,7 +38,6 @@ LrTasks.startAsyncTask(function()
     local union = KeywordService.getKeywordNameUnionForPhotos(targetPhotos)
     local catalogCountsByName = KeywordService.getCatalogKeywordCountsByName(catalog, union.names or {})
     local initialRows = {}
-    local debugRows = {}
     for _, name in ipairs(union.names or {}) do
         local count = catalogCountsByName[name] or 0
         initialRows[#initialRows + 1] = {
@@ -46,7 +45,6 @@ LrTasks.startAsyncTask(function()
             count = count,
             keywordRef = union.keywordByName and union.keywordByName[name],
         }
-        debugRows[#debugRows + 1] = string.format('%s=%s', tostring(name), tostring(count))
     end
 
     trace(string.format('Initial rows: %d', #initialRows))
@@ -55,10 +53,6 @@ LrTasks.startAsyncTask(function()
         catalog = catalog,
         targetPhotos = targetPhotos,
         initialRows = initialRows,
-        debugText = table.concat({
-            'Launched via Library → Plug-in Extras',
-            string.format('Initial keyword counts: %s', table.concat(debugRows, ', ')),
-        }, '\n'),
         toolkitId = (_PLUGIN and _PLUGIN.id) or 'com.gb.keywordeditor',
     }
 end)
