@@ -10,6 +10,36 @@ local function normalizeKeywordName(name)
     return name
 end
 
+local function splitKeywordString(value)
+    if type(value) ~= 'string' or value == '' then return {} end
+
+    local out = {}
+    for part in value:gmatch('[^,]+') do
+        local name = normalizeKeywordName(part)
+        if name ~= '' then
+            out[#out + 1] = name
+        end
+    end
+    return out
+end
+
+local function countItems(listLike)
+    if not listLike then return 0 end
+
+    local okLen, len = pcall(function()
+        return #listLike
+    end)
+    if okLen and type(len) == 'number' then
+        return len
+    end
+
+    local count = 0
+    for _, _ in ipairs(listLike) do
+        count = count + 1
+    end
+    return count
+end
+
 function KeywordService.getAllKeywordNames(catalog)
     local root = catalog:getKeywords()
     local out = {}
@@ -41,11 +71,14 @@ function KeywordService.findKeywordByName(catalog, name)
     name = normalizeKeywordName(name)
     if name == '' then return nil end
 
-    local ok, kw = pcall(function()
-        return catalog:findKeywordByName(name)
-    end)
-    if ok and kw then
-        return kw
+    -- Some LR builds do not expose catalog:findKeywordByName.
+    if type(catalog.findKeywordByName) == 'function' then
+        local ok, kw = pcall(function()
+            return catalog:findKeywordByName(name)
+        end)
+        if ok and kw then
+            return kw
+        end
     end
 
     -- Fallback for older/variant SDKs without catalog:findKeywordByName.
@@ -65,10 +98,8 @@ function KeywordService.findKeywordByName(catalog, name)
         return nil
     end
 
-    local rootsOk, roots = pcall(function()
-        return catalog:getKeywords()
-    end)
-    if rootsOk and roots then
+    local roots = catalog:getKeywords()
+    if roots then
         for _, root in ipairs(roots) do
             local found = walk(root)
             if found then return found end
@@ -82,7 +113,7 @@ function KeywordService.ensureKeywordExists(catalog, name)
     name = normalizeKeywordName(name)
     if name == '' then return nil end
 
-    local kw = catalog:findKeywordByName(name)
+    local kw = KeywordService.findKeywordByName(catalog, name)
     if kw then return kw end
 
     catalog:withWriteAccessDo('Create Keyword', function()
@@ -105,55 +136,182 @@ end
 function KeywordService.countPhotosWithKeyword(catalog, keyword)
     if not keyword then return 0 end
 
+    local function countViaCatalogFind()
+        if not catalog then return 0 end
+
+        local function tryFind(value)
+            local photos = catalog:findPhotos {
+                searchDesc = {
+                    criteria = {
+                        {
+                            criteria = 'keywords',
+                            operation = 'contains',
+                            value = value,
+                        },
+                    },
+                },
+            }
+
+            if photos then
+                return countItems(photos)
+            end
+            return 0
+        end
+
+        local count = tryFind(keyword)
+        if count > 0 then return count end
+
+        local name = keyword:getName()
+        if type(name) == 'string' and name ~= '' then
+            count = tryFind(name)
+            if count > 0 then return count end
+        end
+
+        return 0
+    end
+
+    -- getPhotos() is the documented LrKeyword method; try it first.
+    local photos = keyword:getPhotos()
+    if photos then
+        local count = countItems(photos)
+        if count > 0 then
+            return count
+        end
+    end
+
+    -- Some builds expose a getPhotoCount() shortcut.
     local okCount, cnt = pcall(function()
         return keyword:getPhotoCount()
     end)
-    if okCount and cnt then
-        return cnt
+    if okCount and type(cnt) == 'number' then
+        if cnt > 0 then
+            return cnt
+        end
     end
 
-    local okPhotos, photos = pcall(function()
-        return keyword:getPhotos()
-    end)
-    if okPhotos and photos then
-        return #photos
-    end
-
-    -- Fallback: some LR builds expose counts only via raw metadata.
+    -- Fallback: raw metadata.
     local okMeta, metaCount = pcall(function()
         return keyword:getRawMetadata('photoCount')
             or keyword:getRawMetadata('count')
-            or keyword:getRawMetadata('photos')
     end)
     if okMeta and type(metaCount) == 'number' then
-        return metaCount
+        if metaCount > 0 then
+            return metaCount
+        end
     end
 
-    return 0
+    return countViaCatalogFind()
 end
 
 -- Catalog-wide count using catalog:findPhotos keyword search (works in LR builds where keyword:getPhotos isn't available).
 function KeywordService.countPhotosWithKeywordViaCatalogFind(catalog, keyword)
-    if not catalog or not keyword then return 0 end
+    return KeywordService.countPhotosWithKeyword(catalog, keyword)
+end
 
-    local ok, photos = pcall(function()
-        return catalog:findPhotos {
-            searchDesc = {
-                criteria = {
-                    {
-                        criteria = 'keywords',
-                        operation = 'contains',
-                        value = keyword,
-                    },
-                },
-            },
-        }
-    end)
-
-    if ok and photos then
-        return #photos
+function KeywordService.getCatalogKeywordCountsByName(catalog, names)
+    local countsByName = {}
+    if not catalog or type(names) ~= 'table' or #names == 0 then
+        return countsByName
     end
-    return 0
+
+    local targetNames = {}
+    for _, name in ipairs(names) do
+        local normalized = normalizeKeywordName(name)
+        if normalized ~= '' then
+            targetNames[normalized] = true
+            countsByName[normalized] = 0
+        end
+    end
+
+    local function walk(keyword)
+        if not keyword then return end
+
+        local name = normalizeKeywordName(keyword:getName())
+        if targetNames[name] then
+            local photos = keyword:getPhotos()
+            if photos then
+                countsByName[name] = (countsByName[name] or 0) + countItems(photos)
+            end
+        end
+
+        local children = keyword:getChildren()
+        if children then
+            for _, child in ipairs(children) do
+                walk(child)
+            end
+        end
+    end
+
+    local roots = catalog:getKeywords()
+    if roots then
+        for _, root in ipairs(roots) do
+            walk(root)
+        end
+    end
+
+    -- Last-resort fallback for builds where catalog:getKeywords() works poorly but
+    -- string metadata may still exist on photos.
+    local allZero = true
+    for _, count in pairs(countsByName) do
+        if count > 0 then
+            allZero = false
+            break
+        end
+    end
+
+    if allZero then
+        local function safeGetRawMetadata(photo, key)
+            local ok, val = pcall(function()
+                return photo:getRawMetadata(key)
+            end)
+            if ok then return val end
+            return nil
+        end
+
+        local function safeGetFormattedMetadata(photo, key)
+            local ok, val = pcall(function()
+                return photo:getFormattedMetadata(key)
+            end)
+            if ok then return val end
+            return nil
+        end
+
+        local okAllPhotos, photos = pcall(function()
+            return catalog:getAllPhotos()
+        end)
+        if okAllPhotos and photos then
+            for _, photo in ipairs(photos) do
+                local namesFound = {}
+                local seen = {}
+                local formatted = safeGetFormattedMetadata(photo, 'keywordTagsForDisplay')
+                    or safeGetFormattedMetadata(photo, 'keywordTags')
+                    or safeGetFormattedMetadata(photo, 'keywords')
+                    or safeGetRawMetadata(photo, 'keywordTags')
+                    or safeGetRawMetadata(photo, 'keywords')
+
+                if type(formatted) == 'string' then
+                    namesFound = splitKeywordString(formatted)
+                end
+
+                for _, name in ipairs(namesFound) do
+                    if targetNames[name] and not seen[name] then
+                        seen[name] = true
+                        countsByName[name] = (countsByName[name] or 0) + 1
+                    end
+                end
+            end
+        end
+    end
+
+    return countsByName
+end
+
+function KeywordService.countPhotosWithKeywordName(catalog, name)
+    name = normalizeKeywordName(name)
+    if name == '' then return 0 end
+
+    local countsByName = KeywordService.getCatalogKeywordCountsByName(catalog, { name })
+    return countsByName[name] or 0
 end
 
 function KeywordService.searchKeywordNames(prefix, allNames, limit)

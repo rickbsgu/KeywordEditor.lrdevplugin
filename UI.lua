@@ -70,14 +70,17 @@ local function updateCountForRow(context)
     local row = props.rows[rowIndex]
     if not row then return end
 
-    local kw = KeywordService.findKeywordByName(context.catalog, row.keyword)
-    if not kw then
-        row.count = ''
-        props.rows = props.rows
-        trace(context, string.format('updateCountForRow: keyword not found: %s', tostring(row.keyword)))
-        return
+    local count = 0
+    if type(KeywordService.countPhotosWithKeywordName) == 'function' then
+        count = KeywordService.countPhotosWithKeywordName(context.catalog, row.keyword)
+    else
+        local kw = KeywordService.findKeywordByName(context.catalog, row.keyword)
+        if kw then
+            count = KeywordService.countPhotosWithKeyword(context.catalog, kw)
+        end
     end
-    row.count = tostring(KeywordService.countPhotosWithKeyword(context.catalog, kw))
+
+    row.count = tostring(count or 0)
     props.rows = props.rows
     trace(context, string.format('updateCountForRow: %s -> %s', tostring(row.keyword), tostring(row.count)))
 end
@@ -107,18 +110,14 @@ local function refreshSuggestions(context)
     end
 
     props.suggestions = KeywordService.searchKeywordNames(prefix, context.allKeywordNames, 7)
-    trace(context, string.format('refreshSuggestions: prefix=%q results=%d', prefix, props.suggestions and #props.suggestions or 0))
 end
 
 local function applyKeywordToSelection(context, keywordName)
     keywordName = trim(keywordName)
     if keywordName == '' then return end
 
-    trace(context, string.format('applyKeywordToSelection: %q', keywordName))
-
     local kw = KeywordService.findKeywordByName(context.catalog, keywordName)
     if not kw then
-        trace(context, string.format('applyKeywordToSelection: keyword missing, prompt create: %q', keywordName))
         local btn = LrDialogs.confirm(
             'Confirm New Keyword',
             'Keyword "' .. keywordName .. '" does not exist. Create it?',
@@ -126,19 +125,16 @@ local function applyKeywordToSelection(context, keywordName)
             'Cancel'
         )
         if btn ~= 'ok' then
-            trace(context, string.format('applyKeywordToSelection: create cancelled: %q', keywordName))
             return
         end
         kw = KeywordService.ensureKeywordExists(context.catalog, keywordName)
     end
 
     if not kw then
-        trace(context, string.format('applyKeywordToSelection: ensureKeywordExists failed: %q', keywordName))
         return
     end
 
     KeywordService.applyKeywordToPhotos(context.catalog, kw, context.targetPhotos)
-    trace(context, string.format('applyKeywordToSelection: applied to %d photos', context.targetPhotos and #context.targetPhotos or 0))
     RecentlyUsed.bump(context.recent, keywordName)
     PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
     updateCountForRow(context)
@@ -357,7 +353,6 @@ function UI.showEditor(context)
                 f:push_button {
                     title = 'Create Keyword',
                     action = function()
-                        trace(context, 'ui: Create Keyword')
                         addRow(props)
                         props.rows = props.rows
                         props.suggestionsDismissed = false

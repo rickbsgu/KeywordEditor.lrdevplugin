@@ -70,8 +70,9 @@ These are described the following sections.
 - User can edit a keyword contained in an existing row.
   - The behavior described above will apply to an existing row edit.
   - The current row remains on the edited item.
-- Clicking on the 'Delete' button (in the row) will delete the row UI, but not the keyword.
-  - Rows below the affected row will be moved up.
+- Clicking on the 'Delete' button (in the row) will do the following:
+  - Remove the keywords ONLY FROM THE SELECTED IMAGES.
+  - Refresh the list to reflect the current keywords state.
   - The current row will revert to the initial state (no current row).
 
 ### Recently Used Panel keyword button
