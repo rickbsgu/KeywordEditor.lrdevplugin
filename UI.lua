@@ -19,11 +19,27 @@ local DEBUG_MAX_LINES = 80
 local ROW_VERTICAL_GAP = 6
 local KEYWORD_LIST_BG = LrColor(0.94, 0.94, 0.94)
 local DIALOG_WIDTH = 320
+local ROW_SPACING = 2
+local ROW_COUNT_WIDTH_PX = 30
+local ROW_KEYWORD_WIDTH_PX = 115
+local ROW_DELETE_WIDTH_PX = 30
+local SHOW_LAYOUT_FRAMES = true
+local FRAME_COUNT_BG = LrColor(0.97, 0.90, 0.90)
+local FRAME_KEYWORD_BG = LrColor(0.90, 0.95, 0.98)
+local FRAME_DELETE_BG = LrColor(0.92, 0.97, 0.90)
+local UI_UPDATE_NUMBER = 11
 
 local function trim(s)
     if not s then return '' end
     s = tostring(s)
     return (s:gsub('^%s+', ''):gsub('%s+$', ''))
+end
+
+local function clipText(s, maxLen)
+    s = tostring(s or '')
+    if #s <= maxLen then return s end
+    if maxLen <= 3 then return s:sub(1, maxLen) end
+    return s:sub(1, maxLen - 3) .. '...'
 end
 
 local function rowVisibleKey(i) return 'row_' .. tostring(i) .. '_visible' end
@@ -353,86 +369,61 @@ local function buildRowsView(f, context)
                 spacing = 0,
 
                 f:row {
-                    spacing = 2,
-
+                    spacing = ROW_SPACING,
                     f:static_text {
-                        width_in_chars = 1,
-                        title = bind {
-                            keys = { 'currentRow' },
-                            operation = function(values)
-                                return (tonumber(values.currentRow) == capturedI) and '>' or ' '
+                        width = ROW_COUNT_WIDTH_PX,
+                        title = bind(rowCountKey(capturedI)),
+                        alignment = 'right',
+                    },
+
+                    f:view {
+                        bind_to_object = props,
+                        visible = bind(rowEditingKey(capturedI)),
+                        f:edit_field {
+                            width = ROW_KEYWORD_WIDTH_PX,
+                            value = bind(rowKeywordKey(capturedI)),
+                            immediate = true,
+                            mouse_down = function()
+                                context.props.suggestionsDismissed = false
+                                observeCurrentRowKeyword(context)
+                                refreshSuggestions(context)
                             end,
-                        },
-                    },
-
-                    f:view {
-                        width = 34,
-                        f:static_text {
-                            width_in_chars = 3,
-                            title = bind(rowCountKey(capturedI)),
-                            alignment = 'right',
-                        },
-                    },
-
-                    f:view {
-                        width = 210,
-
-                        f:row {
-                            spacing = 0,
-
-                            f:view {
-                                bind_to_object = props,
-                                visible = bind(rowEditingKey(capturedI)),
-                                f:edit_field {
-                                    width_in_chars = 20,
-                                    value = bind(rowKeywordKey(capturedI)),
-                                    immediate = true,
-                                    mouse_down = function()
-                                        context.props.suggestionsDismissed = false
-                                        observeCurrentRowKeyword(context)
-                                        refreshSuggestions(context)
-                                    end,
-                                    value_change = function(v)
-                                        local row = context.rows and context.rows[capturedI]
-                                        if row then
-                                            row.keyword = v
-                                            row.keywordRef = nil
-                                        end
-                                    end,
-                                    action = function()
-                                        local row = context.rows and context.rows[capturedI]
-                                        if row then
-                                            applyKeywordToSelection(context, row.keyword, { makeReadonly = true })
-                                        end
-                                    end,
-                                },
-                            },
-
-                            f:view {
-                                bind_to_object = props,
-                                visible = bind {
-                                    keys = { rowEditingKey(capturedI) },
-                                    operation = function(values)
-                                        return not values[rowEditingKey(capturedI)]
-                                    end,
-                                },
-                                f:static_text {
-                                    width_in_chars = 20,
-                                    title = bind(rowKeywordKey(capturedI)),
-                                },
-                            },
-                        },
-                    },
-
-                    f:view {
-                        width = 24,
-                        f:push_button {
-                            title = 'X',
-                            width = 22,
+                            value_change = function(v)
+                                local row = context.rows and context.rows[capturedI]
+                                if row then
+                                    row.keyword = v
+                                    row.keywordRef = nil
+                                end
+                            end,
                             action = function()
-                                deleteRow(context, capturedI)
+                                local row = context.rows and context.rows[capturedI]
+                                if row then
+                                    applyKeywordToSelection(context, row.keyword, { makeReadonly = true })
+                                end
                             end,
                         },
+                    },
+
+                    f:view {
+                        bind_to_object = props,
+                        visible = bind {
+                            keys = { rowEditingKey(capturedI) },
+                            operation = function(values)
+                                return not values[rowEditingKey(capturedI)]
+                            end,
+                        },
+                        f:static_text {
+                            width = ROW_KEYWORD_WIDTH_PX,
+                            title = bind(rowKeywordKey(capturedI)),
+                        },
+                    },
+
+                    f:push_button {
+                        title = 'X',
+                        width = ROW_DELETE_WIDTH_PX,
+                        action = function()
+                            deleteRow(context, capturedI)
+                        end,
                     },
                 },
 
@@ -585,12 +576,22 @@ local function buildRecentView(f, context)
         children[#children + 1] = f:static_text { title = 'No recent keywords yet' }
     end
 
+    local recentRowChildren = {}
+    for i = 1, #children do
+        recentRowChildren[#recentRowChildren + 1] = children[i]
+    end
+    recentRowChildren[#recentRowChildren + 1] = f:spacer { fill_horizontal = 1 }
+
     return f:scrolled_view {
         width = DIALOG_WIDTH,
         height = 26,
         horizontal_scroller = true,
         vertical_scroller = false,
-        f:row { spacing = f:control_spacing(), unpack(children) },
+        f:row {
+            spacing = f:control_spacing(),
+            fill_horizontal = 1,
+            unpack(recentRowChildren),
+        },
     }
 end
 
@@ -645,6 +646,9 @@ function UI.showEditor(context)
 
             f:row {
                 fill_horizontal = 1,
+                f:static_text {
+                    title = 'UI Update: ' .. tostring(UI_UPDATE_NUMBER),
+                },
                 f:spacer { fill_horizontal = 1 },
                 f:push_button {
                     title = 'Create Keyword',
