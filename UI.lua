@@ -18,6 +18,7 @@ local MAX_SUGGESTIONS = 7
 local DEBUG_MAX_LINES = 80
 local ROW_VERTICAL_GAP = 6
 local KEYWORD_LIST_BG = LrColor(0.94, 0.94, 0.94)
+local DIALOG_WIDTH = 320
 
 local function trim(s)
     if not s then return '' end
@@ -442,7 +443,7 @@ local function buildRowsView(f, context)
 
     return f:scrolled_view {
         height = 220,
-        width = 600,
+        width = DIALOG_WIDTH,
         horizontal_scroller = false,
         vertical_scroller = true,
         background_color = KEYWORD_LIST_BG,
@@ -516,9 +517,15 @@ local function buildSuggestionsView(f, context)
                     },
                 },
 
-                f:row {
-                    spacing = f:control_spacing(),
-                    unpack(slots),
+                f:scrolled_view {
+                    width = DIALOG_WIDTH,
+                    height = 24,
+                    horizontal_scroller = true,
+                    vertical_scroller = false,
+                    f:row {
+                        spacing = f:control_spacing(),
+                        unpack(slots),
+                    },
                 },
             },
         },
@@ -578,7 +585,13 @@ local function buildRecentView(f, context)
         children[#children + 1] = f:static_text { title = 'No recent keywords yet' }
     end
 
-    return f:row { spacing = f:control_spacing(), unpack(children) }
+    return f:scrolled_view {
+        width = DIALOG_WIDTH,
+        height = 26,
+        horizontal_scroller = true,
+        vertical_scroller = false,
+        f:row { spacing = f:control_spacing(), unpack(children) },
+    }
 end
 
 function UI.showEditor(context)
@@ -628,21 +641,7 @@ function UI.showEditor(context)
         local content = f:column {
             spacing = f:control_spacing(),
             fill_horizontal = 1,
-
-            f:scrolled_view {
-                width = 700,
-                height = 160,
-                horizontal_scroller = true,
-                vertical_scroller = true,
-
-                f:edit_field {
-                    bind_to_object = props,
-                    value = bind 'debugText',
-                    width_in_chars = 90,
-                    height_in_lines = 30,
-                    tooltip = 'Debug output (temporary). You can select/copy this text.',
-                },
-            },
+            width = DIALOG_WIDTH,
 
             f:row {
                 fill_horizontal = 1,
@@ -659,12 +658,14 @@ function UI.showEditor(context)
 
             f:group_box {
                 title = 'Keywords',
+                width = DIALOG_WIDTH,
                 fill_horizontal = 1,
                 buildRowsView(f, context),
             },
 
             f:group_box {
                 title = 'Completion',
+                width = DIALOG_WIDTH,
                 fill_horizontal = 1,
                 buildSuggestionsView(f, context),
             },
@@ -673,6 +674,7 @@ function UI.showEditor(context)
 
             f:group_box {
                 title = 'Recently Used Keywords',
+                width = DIALOG_WIDTH,
                 fill_horizontal = 1,
                 buildRecentView(f, context),
             },
