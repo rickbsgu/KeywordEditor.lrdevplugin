@@ -4,7 +4,7 @@ return {
     LrSdkVersion = 15.0,
 
     LrToolkitIdentifier = 'com.gb.keywordeditor',
-    LrPluginName = 'GB Keyword Editor (CANARY)',
+    LrPluginName = 'GB Keyword Editor',
 
     LrExportFilterProvider = {
         title = 'GB Keyword Editor (Launcher)',
