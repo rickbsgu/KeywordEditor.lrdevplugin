@@ -27,7 +27,7 @@ local SHOW_LAYOUT_FRAMES = true
 local FRAME_COUNT_BG = LrColor(0.97, 0.90, 0.90)
 local FRAME_KEYWORD_BG = LrColor(0.90, 0.95, 0.98)
 local FRAME_DELETE_BG = LrColor(0.92, 0.97, 0.90)
-local UI_UPDATE_NUMBER = 11
+local UI_UPDATE_NUMBER = 14
 
 local function trim(s)
     if not s then return '' end
@@ -271,18 +271,35 @@ end
 
 local function addRow(context)
     if not context.rows then context.rows = {} end
-
-    context.rows[#context.rows + 1] = {
-        count = '',
-        keyword = '',
-        keywordRef = nil,
+    local props = context.props
+    props.suggestionsDismissed = false
+    -- Show modal dialog for new keyword entry
+    local f = LrView.osFactory()
+    local keywordProps = LrBinding.makePropertyTable()
+    keywordProps.newKeyword = ''
+    local result = LrDialogs.presentModalDialog {
+        title = 'Create Keyword',
+        contents = f:column {
+            spacing = f:control_spacing(),
+            f:static_text { title = 'Enter new keyword:' },
+            f:edit_field {
+                value = LrView.bind('newKeyword'),
+                width_in_chars = 30,
+            },
+        },
+        bind_to_object = keywordProps,
+        actionVerb = 'OK',
+        otherVerb = 'Cancel',
     }
-
-    context.props.currentRow = #context.rows
-    context.props.suggestionsDismissed = false
-
-    syncRowsToProps(context)
-    refreshSuggestions(context)
+    if result == 'ok' and trim(keywordProps.newKeyword) ~= '' then
+        context.rows[#context.rows + 1] = {
+            count = '',
+            keyword = trim(keywordProps.newKeyword),
+            keywordRef = nil,
+        }
+        syncRowsToProps(context)
+        refreshSuggestions(context)
+    end
 end
 
 local function deleteRow(context, index)
@@ -358,16 +375,17 @@ local function buildRowsView(f, context)
     local props = context.props
     local bind = LrView.bind
 
+    local props = context.props
     local children = {}
-    for i = 1, MAX_ROWS do
+    local rowCount = #context.rows or 0
+    for i = 1, rowCount do
         local capturedI = i
+        local row = context.rows[capturedI]
         children[#children + 1] = f:view {
             bind_to_object = props,
             visible = bind(rowVisibleKey(capturedI)),
-
             f:column {
                 spacing = 0,
-
                 f:row {
                     spacing = ROW_SPACING,
                     f:static_text {
@@ -375,49 +393,10 @@ local function buildRowsView(f, context)
                         title = bind(rowCountKey(capturedI)),
                         alignment = 'right',
                     },
-
-                    f:view {
-                        bind_to_object = props,
-                        visible = bind(rowEditingKey(capturedI)),
-                        f:edit_field {
-                            width = ROW_KEYWORD_WIDTH_PX,
-                            value = bind(rowKeywordKey(capturedI)),
-                            immediate = true,
-                            mouse_down = function()
-                                context.props.suggestionsDismissed = false
-                                observeCurrentRowKeyword(context)
-                                refreshSuggestions(context)
-                            end,
-                            value_change = function(v)
-                                local row = context.rows and context.rows[capturedI]
-                                if row then
-                                    row.keyword = v
-                                    row.keywordRef = nil
-                                end
-                            end,
-                            action = function()
-                                local row = context.rows and context.rows[capturedI]
-                                if row then
-                                    applyKeywordToSelection(context, row.keyword, { makeReadonly = true })
-                                end
-                            end,
-                        },
+                    f:static_text {
+                        width = ROW_KEYWORD_WIDTH_PX,
+                        title = bind(rowKeywordKey(capturedI)),
                     },
-
-                    f:view {
-                        bind_to_object = props,
-                        visible = bind {
-                            keys = { rowEditingKey(capturedI) },
-                            operation = function(values)
-                                return not values[rowEditingKey(capturedI)]
-                            end,
-                        },
-                        f:static_text {
-                            width = ROW_KEYWORD_WIDTH_PX,
-                            title = bind(rowKeywordKey(capturedI)),
-                        },
-                    },
-
                     f:push_button {
                         title = 'X',
                         width = ROW_DELETE_WIDTH_PX,
@@ -426,12 +405,11 @@ local function buildRowsView(f, context)
                         end,
                     },
                 },
-
                 f:spacer { height = ROW_VERTICAL_GAP },
             },
         }
     end
-
+    -- Removed the create row from inside the rows container
     return f:scrolled_view {
         height = 220,
         width = DIALOG_WIDTH,
@@ -443,8 +421,6 @@ local function buildRowsView(f, context)
             background_color = KEYWORD_LIST_BG,
 
             f:column {
-                -- Hidden slot views still participate in column spacing in some LR builds.
-                -- Keep spacing at 0 so invisible rows don't consume vertical layout.
                 spacing = 0,
                 unpack(children),
             },
@@ -619,6 +595,11 @@ function UI.showEditor(context)
         props.hasSuggestions = false
         props.showSuggestions = false
         props.debugText = ''
+        props.showCreateField = false -- Hide edit field by default
+        props.hideCreateField = true  -- Inverse of showCreateField
+        props.createButtonState = 'create' -- 'create' or 'accept'
+        props.createButtonLabel = 'Create Keyword'
+        -- Ensure the label is set before UI is built
         for i = 1, MAX_SUGGESTIONS do
             props[suggestionVisibleKey(i)] = false
             props[suggestionTitleKey(i)] = ''
@@ -639,32 +620,100 @@ function UI.showEditor(context)
         setDebugHeader(context, buildDebugHeader())
         appendDebug(context, 'debug channel active')
 
+
+        -- Keep hideCreateField in sync with showCreateField
+        props:addObserver('showCreateField', function()
+            props.hideCreateField = not props.showCreateField
+        end)
+
         local content = f:column {
             spacing = f:control_spacing(),
             fill_horizontal = 1,
-            width = DIALOG_WIDTH,
-
-            f:row {
-                fill_horizontal = 1,
-                f:static_text {
-                    title = 'UI Update: ' .. tostring(UI_UPDATE_NUMBER),
-                },
-                f:spacer { fill_horizontal = 1 },
-                f:push_button {
-                    title = 'Create Keyword',
-                    action = function()
-                        addRow(context)
-                    end,
-                },
-            },
-
-            f:separator { fill_horizontal = 1 },
 
             f:group_box {
                 title = 'Keywords',
                 width = DIALOG_WIDTH,
                 fill_horizontal = 1,
                 buildRowsView(f, context),
+            },
+
+            -- Add the create row and button below the rows container and above Completion
+            -- Container 1: Only the 'Create Keyword' button, right-aligned
+            f:view {
+                bind_to_object = context.props,
+                visible = LrView.bind('hideCreateField'),
+                fill_horizontal = 1,
+                f:row {
+                    spacing = f:control_spacing(),
+                    fill_horizontal = 1,
+                    f:spacer { fill_horizontal = 1 },
+                    f:push_button {
+                        title = 'Create Keyword',
+                        action = function()
+                            local props = context.props
+                            props.showCreateField = true
+                            props.pendingNewKeyword = ''
+                        end,
+                    },
+                },
+            },
+            -- Container 2: Edit field and 'Accept' button, right-aligned and in a row
+            f:view {
+                bind_to_object = context.props,
+                visible = LrView.bind('showCreateField'),
+                fill_horizontal = 1,
+                f:row {
+                    spacing = f:control_spacing(),
+                    fill_horizontal = 1,
+                    f:spacer { fill_horizontal = 1 },
+                    f:edit_field {
+                        value = LrView.bind('pendingNewKeyword'),
+                        width = math.floor(ROW_KEYWORD_WIDTH_PX * 1.5),
+                        immediate = true,
+                        focus = true,
+                        key_down = function(view, key)
+                            local props = context.props
+                            if key == 'return' or key == 'enter' then
+                                local v = props.pendingNewKeyword or ''
+                                if trim(v) ~= '' then
+                                    context.rows[#context.rows + 1] = {
+                                        count = '',
+                                        keyword = trim(v),
+                                        keywordRef = nil,
+                                    }
+                                    props.pendingNewKeyword = ''
+                                    props.showCreateField = false
+                                    syncRowsToProps(context)
+                                    refreshSuggestions(context)
+                                end
+                                return true
+                            elseif key == 'escape' then
+                                props.pendingNewKeyword = ''
+                                props.showCreateField = false
+                                return true
+                            end
+                            return false
+                        end,
+                    },
+                    f:push_button {
+                        title = 'Accept',
+                        action = function()
+                            local props = context.props
+                            local v = props.pendingNewKeyword or ''
+                            if trim(v) ~= '' then
+                                context.rows[#context.rows + 1] = {
+                                    count = '',
+                                    keyword = trim(v),
+                                    keywordRef = nil,
+                                }
+                                props.pendingNewKeyword = ''
+                                props.showCreateField = false
+                                syncRowsToProps(context)
+                                refreshSuggestions(context)
+                            end
+                        end,
+                    },
+                },
             },
 
             f:group_box {
