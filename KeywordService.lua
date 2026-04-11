@@ -1,4 +1,5 @@
 local LrApplication = import 'LrApplication'
+local LrDialogs = import 'LrDialogs'
 
 local KeywordService = {}
 
@@ -84,102 +85,6 @@ function KeywordService.findKeywordByName(catalog, name)
     return nil
 end
 
-function KeywordService.ensureKeywordExists(catalog, name)
-    name = normalizeKeywordName(name)
-    if name == '' then return nil end
-
-    local kw = KeywordService.findKeywordByName(catalog, name)
-    if kw then return kw end
-
-    catalog:withWriteAccessDo('Create Keyword', function()
-        kw = catalog:createKeyword(name, {}, true, nil, true)
-    end)
-
-    return kw
-end
-
-function KeywordService.applyKeywordToPhotos(catalog, keyword, photos)
-    if not keyword or not photos or #photos == 0 then return end
-
-    catalog:withWriteAccessDo('Apply Keyword', function()
-        for _, photo in ipairs(photos) do
-            photo:addKeyword(keyword)
-        end
-    end)
-end
-
-function KeywordService.removeKeywordFromPhotos(catalog, keyword, photos)
-    if not keyword or not photos or #photos == 0 then return end
-
-    catalog:withWriteAccessDo('Remove Keyword', function()
-        for _, photo in ipairs(photos) do
-            photo:removeKeyword(keyword)
-        end
-    end)
-end
-
-function KeywordService.countPhotosWithKeyword(catalog, keyword)
-    if not keyword then return 0 end
-    local photos = keyword:getPhotos()
-    return countItems(photos)
-end
-
-function KeywordService.countPhotosWithKeywordViaCatalogFind(catalog, keyword)
-    return KeywordService.countPhotosWithKeyword(catalog, keyword)
-end
-
-function KeywordService.getCatalogKeywordCountsByName(catalog, names)
-    local countsByName = {}
-    if not catalog or type(names) ~= 'table' or #names == 0 then
-        return countsByName
-    end
-
-    local targetNames = {}
-    for _, name in ipairs(names) do
-        local normalized = normalizeKeywordName(name)
-        if normalized ~= '' then
-            targetNames[normalized] = true
-            countsByName[normalized] = 0
-        end
-    end
-
-    local function walk(keyword)
-        if not keyword then return end
-
-        local name = normalizeKeywordName(keyword:getName())
-        if targetNames[name] then
-            local photos = keyword:getPhotos()
-            if photos then
-                countsByName[name] = (countsByName[name] or 0) + countItems(photos)
-            end
-        end
-
-        local children = keyword:getChildren()
-        if children then
-            for _, child in ipairs(children) do
-                walk(child)
-            end
-        end
-    end
-
-    local roots = catalog:getKeywords()
-    if roots then
-        for _, root in ipairs(roots) do
-            walk(root)
-        end
-    end
-
-    return countsByName
-end
-
-function KeywordService.countPhotosWithKeywordName(catalog, name)
-    name = normalizeKeywordName(name)
-    if name == '' then return 0 end
-
-    local countsByName = KeywordService.getCatalogKeywordCountsByName(catalog, { name })
-    return countsByName[name] or 0
-end
-
 function KeywordService.searchKeywordNames(prefix, allNames, limit)
     prefix = normalizeKeywordName(prefix)
     if prefix == '' then return {} end
@@ -232,8 +137,119 @@ function KeywordService.searchKeywordNames(prefix, allNames, limit)
     return matches
 end
 
--- Returns { names = {..sorted..}, countsByName = { [name] = nSelectedPhotosWithKeyword } }
-function KeywordService.getKeywordNameUnionForPhotos(photos)
+function KeywordService.addNewKeyword(catalog, name)
+    name = normalizeKeywordName(name)
+    if name == '' then return nil end
+
+    local catalog = LrApplication.activeCatalog()
+    local kw = KeywordService.findKeywordByName(catalog, name)
+    if kw then return kw end
+
+    catalog:withWriteAccessDo('Create Keyword', function()
+        kw = catalog:createKeyword(name, {}, true, nil, true)
+    end)
+
+    return kw
+end
+
+function KeywordService.applyKeywordToPhotos(catalog, keyword, photos)
+    if not keyword or not photos or #photos == 0 then return end
+
+    catalog:withWriteAccessDo('Apply Keyword', function()
+        for _, photo in ipairs(photos) do
+            photo:addKeyword(keyword)
+        end
+    end)
+end
+
+function KeywordService.removeKeywordFromPhotos(catalog, keyword, photos)
+    if not keyword or not photos or #photos == 0 then return end
+
+    catalog:withWriteAccessDo('Remove Keyword', function()
+        for _, photo in ipairs(photos) do
+            photo:removeKeyword(keyword)
+        end
+    end)
+end
+
+function KeywordService.countPhotosWithKeyword(catalog, keyword_obj)
+    if not keyword_obj then return 0 end
+    local photos = keyword_obj:getPhotos()
+    return countItems(photos)
+end
+
+function KeywordService.countPhotosWithKeywordViaCatalogFind(catalog, keyword_obj)
+    return KeywordService.countPhotosWithKeyword(catalog, keyword_obj)
+end
+
+--[[
+  Get the keyword counts for the entire catalog
+
+  args:
+    catalog: the catalog
+    names: list of names
+    returns: object of counts keyed by names
+]]
+function KeywordService.getCatalogKeywordCountsByName(catalog, names)
+    local countsByName = {}
+    if not catalog or type(names) ~= 'table' or #names == 0 then
+        return countsByName
+    end
+
+    local targetNames = {}
+    for _, name in ipairs(names) do
+        local normalized = normalizeKeywordName(name)
+        if normalized ~= '' then
+            targetNames[normalized] = true
+            countsByName[normalized] = 0
+        end
+    end
+
+    -- recurse down children
+    local function walk(keyword_obj)
+        if not keyword_obj then return end
+
+        local name = normalizeKeywordName(keyword_obj:getName())
+        if targetNames[name] then
+            local photos = keyword_obj:getPhotos()
+            if photos then
+                countsByName[name] = (countsByName[name] or 0) + countItems(photos)
+                      -- append to the count, if already counted. Otherwise start from 0
+            end
+        end
+        -- recurse through all of the keyword heirarchy
+        local children = keyword_obj:getChildren()
+        if children then
+            for _, child in ipairs(children) do
+                walk(child)
+            end
+        end
+    end
+
+    -- this is the entry point
+    local roots = catalog:getKeywords()
+    if roots then
+        for _, root in ipairs(roots) do
+            walk(root)
+        end
+    end
+
+    return countsByName
+end
+
+function KeywordService.countPhotosWithKeywordName(catalog, name)
+    name = normalizeKeywordName(name)
+    if name == '' then return 0 end
+
+    local countsByName = KeywordService.getCatalogKeywordCountsByName(catalog, { name })
+    return countsByName[name] or 0
+end
+
+--[[
+   
+   Returns { names = {..sorted..}, countsByName = { [name] = nSelectedPhotosWithKeyword } }
+]]
+function KeywordService.getKeywordDataForPhotos(photos)
     local countsByName = {}
     local keywordByName = {}
     if not photos or #photos == 0 then

@@ -4,18 +4,16 @@ local LrTasks = import 'LrTasks'
 
 local UI = require 'UI'
 local KeywordService = require 'KeywordService'
-local okLogService, LogService = pcall(require, 'LogService')
+local LogService = require 'LogService'
 
 local function trace(msg)
-    if not okLogService or not LogService or type(LogService.append) ~= 'function' then
-        return
-    end
-    local logPath = '~/Library/Logs/Adobe/Lightroom/GBKeywordEditor.log'
-    if _G and type(_G.GBKeywordEditorLogPath) == 'string' and _G.GBKeywordEditorLogPath ~= '' then
-        logPath = _G.GBKeywordEditorLogPath
-    end
-    LogService.append(logPath, msg)
+    LogService.append(msg)
 end
+--[[
+if not status then
+  LrDialogs.message('OpenKeywordEditor, requireKeywordService error: ' .. KeywordService)
+end
+]]
 
 LrTasks.startAsyncTask(function()
     trace('OpenKeywordEditor invoked')
@@ -35,7 +33,7 @@ LrTasks.startAsyncTask(function()
     end
 
     -- Precompute initial rows with counts so the modal can render quickly.
-    local union = KeywordService.getKeywordNameUnionForPhotos(targetPhotos)
+    local union = KeywordService.getKeywordDataForPhotos(targetPhotos)
     local catalogCountsByName = KeywordService.getCatalogKeywordCountsByName(catalog, union.names or {})
     local initialRows = {}
     for _, name in ipairs(union.names or {}) do

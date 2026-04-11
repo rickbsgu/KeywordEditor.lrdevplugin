@@ -18,7 +18,7 @@ local function trace(msg)
     if _G and type(_G.GBKeywordEditorLogPath) == 'string' and _G.GBKeywordEditorLogPath ~= '' then
         logPath = _G.GBKeywordEditorLogPath
     end
-    LogService.append(logPath, msg)
+    LogService.append(msg)
 end
 
 return {
