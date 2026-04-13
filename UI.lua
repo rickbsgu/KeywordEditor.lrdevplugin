@@ -8,14 +8,13 @@ local LrColor = import 'LrColor'
 local KeywordService = require 'KeywordService'
 local RecentlyUsed = require 'RecentlyUsed'
 local PrefsService = require 'PrefsService'
-local okLogService, LogService = pcall(require, 'LogService')
+local LogService = require 'LogService'
 
 local UI = {}
 local loadRowsFromSelection
 
-local MAX_ROWS = 200
+local MAX_KEYWORDS = 50
 local MAX_SUGGESTIONS = 7
-local DEBUG_MAX_LINES = 80
 local ROW_VERTICAL_GAP = 6
 local KEYWORD_LIST_BG = LrColor(0.94, 0.94, 0.94)
 local DIALOG_WIDTH = 320
@@ -42,65 +41,13 @@ local function clipText(s, maxLen)
     return s:sub(1, maxLen - 3) .. '...'
 end
 
--- local function rowVisibleKey(i) return 'row_' .. tostring(i) .. '_visible' end
+local function rowVisibleKey(i) return 'row_' .. tostring(i) .. '_visible' end
 local function rowCountKey(i) return 'row_' .. tostring(i) .. '_count' end
 local function rowKeywordKey(i) return 'row_' .. tostring(i) .. '_keyword' end
 -- local function rowEditingKey(i) return 'row_' .. tostring(i) .. '_editing' end
 local function suggestionVisibleKey(i) return 'suggestion_' .. tostring(i) .. '_visible' end
 local function suggestionTitleKey(i) return 'suggestion_' .. tostring(i) .. '_title' end
 
-local function renderDebugText(context)
-    local header = (context and context._debugHeader) or ''
-    local lines = (context and context._debugLines) or {}
-    if #lines == 0 then
-        return header
-    end
-    if header == '' then
-        return table.concat(lines, '\n')
-    end
-    return header .. '\n\n' .. table.concat(lines, '\n')
-end
-
-local function setDebugHeader(context, header)
-    if not context then return end
-    context._debugHeader = header or ''
-    if context.props then
-        context.props.debugText = renderDebugText(context)
-    end
-end
-
-local function appendDebug(context, msg)
-    if not context then return end
-    if not context._debugLines then
-        context._debugLines = {}
-    end
-
-    context._debugLines[#context._debugLines + 1] = tostring(msg)
-    while #context._debugLines > DEBUG_MAX_LINES do
-        table.remove(context._debugLines, 1)
-    end
-
-    if context.props then
-        context.props.debugText = renderDebugText(context)
-    end
-end
-
-local function trace(context, msg)
-    appendDebug(context, msg)
-    if not okLogService then
-        LrDialogs.message("UI.lua: Logging Broken", "LogService could not be loaded. Logging will be disabled.", "warning")
-    end
-
-    local prefix = 'UI'
-    if context and type(context) == 'table' then
-        local toolkitId = context.toolkitId
-        if type(toolkitId) == 'string' and toolkitId ~= '' then
-            prefix = prefix .. ' ' .. toolkitId
-        end
-    end
-
-    LogService.append(string.format('%s: %s', prefix, tostring(msg)))
-end
 
 --[[
   Takes the rows obtained from 'loadRowsFromSelection' and creates
@@ -109,17 +56,17 @@ end
 ]]
 local function syncRowsToProps(context)
     local props = context.props
-    local rows = context.rows or {}
+    
 
-    props.rows = rows
-
-    for i = 1, #rows do
-        local row = rows[i]
-        -- props[rowVisibleKey(i)] = row and true or false
+    for i = 1, MAX_KEYWORDS do
+        local row = context.rows[i]
+        props[rowVisibleKey(i)] = row and true or false
         props[rowCountKey(i)] = row and tostring(row.count or '') or ''
         props[rowKeywordKey(i)] = row and tostring(row.keyword or '') or ''
-        -- props[rowEditingKey(i)] = (row and props.currentRow == i) and true or false
     end
+
+    props.rows = context.rows
+    props.rowCount = #props.rows
 end
 
 local function refreshSuggestions(context)
@@ -156,7 +103,6 @@ local function refreshSuggestions(context)
     local hasAny = (#matches > 0)
     props.hasSuggestions = hasAny
     props.showSuggestions = hasAny
-    trace(context, string.format('suggestions: prefix="%s" matches=%d [%s]', prefix, #matches, table.concat(matches, ', ')))
 end
 
 local function applyKeywordToSelection(context, keywordName, opts)
@@ -247,7 +193,6 @@ local function deleteRow(context, index)
     local keywordName = trim(row.keyword)
     table.remove(rows, index)
     context.rows = rows
-    context.props.currentRow = 0
     context.props.suggestionsDismissed = false
     syncRowsToProps(context)
     refreshSuggestions(context)
@@ -261,9 +206,9 @@ local function deleteRow(context, index)
 
         if kw then
             KeywordService.removeKeywordFromPhotos(context.catalog, kw, context.targetPhotos)
-            trace(context, string.format('delete-row applied for %s', tostring(keywordName)))
+            LogService.append(string.format('delete-row applied for %s', tostring(keywordName)))
         else
-            trace(context, string.format('delete-row could not resolve keyword for %s', tostring(keywordName)))
+            LogService.append(string.format('delete-row could not resolve keyword for %s', tostring(keywordName)))
         end
 
         -- Reconcile rows from fresh selected-photo state after deletion.
@@ -282,14 +227,14 @@ end
 loadRowsFromSelection = function(context)
     local rows = {}
 
-    local data = KeywordService.getKeywordDataForPhotos(context.targetPhotos or {})
-    local countsByName = KeywordService.getCatalogKeywordCountsByName(context.catalog, data.names or {})
+    local kwData = KeywordService.getKeywordDataForPhotos(context.targetPhotos or {})
+    local countsByName = KeywordService.getCatalogKeywordCountsByName(context.catalog, kwData.names or {})
 
-    for _, name in ipairs(data.names or {}) do
+    for _, name in ipairs(kwData.names or {}) do
         rows[#rows + 1] = {
             keyword = name,
             count = tostring(countsByName[name] or 0),
-            keywordRef = data.keywordByName and data.keywordByName[name],
+            keywordRef = kwData.keywordByName and kwData.keywordByName[name],
         }
     end
 
@@ -306,40 +251,38 @@ end
 local function buildRowsView(f, context)
     local props = context.props
     local bind = LrView.bind
-
-    local props = context.props
     local children = {}
-    local rowCount = #context.rows or 0
-    for i = 1, rowCount do
-        local capturedI = i
-        local row = context.rows[capturedI]
-        children[#children + 1] = f:view {
+    for ix = 1, MAX_KEYWORDS do
+        local row = props.rows[ix]
+        local rowView = f:view {
             bind_to_object = props,
-            -- visible = bind(rowVisibleKey(capturedI)),
+            visible = bind(rowVisibleKey(ix)),
             f:column {
                 spacing = 0,
                 f:row {
                     spacing = ROW_SPACING,
                     f:static_text {
                         width = ROW_COUNT_WIDTH_PX,
-                        title = bind(rowCountKey(capturedI)),
+                        title = bind(rowCountKey(ix)),
                         alignment = 'right',
                     },
                     f:static_text {
                         width = ROW_KEYWORD_WIDTH_PX,
-                        title = bind(rowKeywordKey(capturedI)),
+                        title = bind(rowKeywordKey(ix)),
                     },
                     f:push_button {
+                        visible = bind(rowVisibleKey(ix)),
                         title = 'X',
                         width = ROW_DELETE_WIDTH_PX,
                         action = function()
-                            deleteRow(context, capturedI)
+                            deleteRow(context, ix)
                         end,
                     },
                 },
                 f:spacer { height = ROW_VERTICAL_GAP },
             },
         }
+        children[ix] = rowView
     end
     return f:scrolled_view {
         height = 220,
@@ -378,16 +321,7 @@ local function buildSuggestionsView(f, context)
             f:static_text {
                 title = bind(suggestionTitleKey(i)),
                 mouse_down = function()
-                    local name = props[suggestionTitleKey(capturedI)]
-                    if not name or name == '' then return end
-
-                    context.rows[idx].keyword = name
-                    context.rows[idx].keywordRef = nil
-                    context.rows[idx].count = ''
-                    props.suggestionsDismissed = false
-                    syncRowsToProps(context)
-                    refreshSuggestions(context)
-                    applyKeywordToSelection(context, name, { makeReadonly = true })
+                    props.pendingNewKeyword = props[suggestionTitleKey(capturedI)]
                 end,
             },
         }
@@ -444,7 +378,7 @@ local function buildSuggestionsView(f, context)
         },
     }
 end
-
+ 
 local function buildRecentView(f, context)
     local props = context.props
     local children = {}
@@ -453,8 +387,7 @@ local function buildRecentView(f, context)
         children[#children + 1] = f:push_button {
             title = name,
             action = function()
-                addRow(context)
-                local idx = #props.rows
+                local idx = #props.rows + 1
 
                 context.rows[idx].keyword = name
                 context.rows[idx].keywordRef = KeywordService.findKeywordByName(name)
@@ -498,23 +431,19 @@ end
 ]]
 function UI.showEditor(context)
     LrFunctionContext.callWithContext('GBKeywordEditor', function(fc)
-        context._debugLines = {}
-        context._debugHeader = ''
-
-        trace(context, 'showEditor: begin')
+        LogService.append('showEditor: begin')
 
         context.recent = RecentlyUsed.new(10)
         context.toolkitId = context.toolkitId or 'com.gb.keywordeditor.dev2'
         RecentlyUsed.loadInto(context.recent, PrefsService.loadRecent(context.toolkitId))
         context.allKeywordNames = KeywordService.getAllKeywordNames(context.catalog)
-        trace(context, string.format('showEditor: loaded %d keyword names', context.allKeywordNames and #context.allKeywordNames or 0))
+        LogService.append(string.format('showEditor: loaded %d keyword names', context.allKeywordNames and #context.allKeywordNames or 0))
 
         local f = LrView.osFactory()
         local bind = LrView.bind
         local props = LrBinding.makePropertyTable(fc)
         context.props = props
 
-        props.currentRow = 0
         props.recentVersion = 0
         props.suggestionsDismissed = false
         props.hasSuggestions = false
@@ -530,14 +459,9 @@ function UI.showEditor(context)
         end
 
         loadRowsFromSelection(context)
-        trace(context, string.format('showEditor: rows=%d currentRow=%d', context.rows and #context.rows or 0, tonumber(props.currentRow) or 0))
+        -- LogService.append(string.format('showEditor: rows=%d', context.rows and #context.rows or 0)
 
-        local function buildDebugHeader()
-            return '=== TRACE OUTPUT ==='
-        end
-
-        setDebugHeader(context, buildDebugHeader())
-        appendDebug(context, 'debug channel active')
+        -- dLogService.append('debug channel active')
 
 --[[
     Beg Create Observers
@@ -608,7 +532,6 @@ function UI.showEditor(context)
                               local props = context.props
                               local v = props.pendingNewKeyword or ''
                               if trim(v) ~= '' then
-                                  
                                   context.rows[#context.rows + 1] = {
                                       count = '',
                                       keyword = trim(v),
@@ -618,6 +541,7 @@ function UI.showEditor(context)
                                   props.showCreateField = false
                                   syncRowsToProps(context)
                                   refreshSuggestions(context)
+                                  applyKeywordToSelection(context, v, { makeReadonly = true })
                               end
                           end,
                       },
@@ -656,7 +580,7 @@ function UI.showEditor(context)
             actionVerb = 'Close',
         }
 
-        trace(context, string.format('showEditor: dialog closed result=%s', tostring(result)))
+        -- LogService.append(string.format('showEditor: dialog closed result=%s', tostring(result)))
         return result
     end)
 end

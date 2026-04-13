@@ -226,7 +226,7 @@ function KeywordService.getCatalogKeywordCountsByName(catalog, names)
         end
     end
 
-    -- this is the entry point
+    -- this is the traversal root
     local roots = catalog:getKeywords()
     if roots then
         for _, root in ipairs(roots) do
@@ -290,6 +290,7 @@ function KeywordService.getKeywordDataForPhotos(photos)
         end
     end
 
+    -- recursion base
     local roots = catalog:getKeywords()
     if roots then
         for _, kw in ipairs(roots) do

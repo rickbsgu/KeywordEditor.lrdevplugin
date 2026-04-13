@@ -10,6 +10,7 @@ return {
 
     files = {
       "Info.lua",
+      "Debug.lua",
       "PrefsService.lua",
       "OpenKeywordEditor.lua",
       "LogService.lua",
