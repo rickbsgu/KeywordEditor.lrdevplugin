@@ -384,39 +384,42 @@ local function createGrid(f, context, kwItems, pfx, fc)
     local columnItems = { spacing = 0 }
     local kwdIX = 1
     local props = LrBinding.makePropertyTable(fc)
-    local CELL_WIDTH = DIALOG_WIDTH / 3
+    local CELL_WIDTH = (DIALOG_WIDTH / 3) - 3
     
     for i, text in ipairs(kwItems) do
       props[pfx .. i] = text
     end
-
+    columnItems[#columnItems + 1] = f:separator { fill_horizontal = 1 }
     for i = 1, 3 do
         local rowItems = { spacing = 0 }
         
+        rowItems[#rowItems + 1] = f:separator { fill_vertical = 1 }
         for j = 1, 3 do
             local cellKey = pfx .. kwdIX
-            rowItems[#rowItems + 1] = f:static_text {
-                title = LrView.bind({
-                   bind_to_object = props,
-                   key = cellKey
-                }),
+            rowItems[#rowItems + 1] = f:column {
                 width = CELL_WIDTH,
                 height = 30,
-                alignment = 'center',
-                vertical_alignment = 'center',
+                spacing = 0,
+                f:spacer { fill_vertical = 1 },
+                f:static_text {
+                    title = LrView.bind({
+                      bind_to_object = props,
+                      key = cellKey
+                    }),
+                    width = CELL_WIDTH - 2,
+                    alignment = 'center',
+                },
+                f:spacer { fill_vertical = 1 }
             }
-            if j < 3 then
-              rowItems[#rowItems + 1] = f:separator { fill_vertical = 1 }
-            end
+
+            rowItems[#rowItems + 1] = f:separator { fill_vertical = 1 }
 
             kwdIX = kwdIX + 1
-        end
+        end -- loop
         
         -- Add the row to the main grid container
         columnItems[#columnItems + 1] = f:row (rowItems)
-        if i < 3 then
-          columnItems[#columnItems + 1] = f:separator { fill_horizontal = 1 }
-        end
+        columnItems[#columnItems + 1] = f:separator { fill_horizontal = 1 }
     end
 
     return f:column(columnItems)
