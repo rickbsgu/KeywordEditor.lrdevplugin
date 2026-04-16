@@ -379,16 +379,14 @@ local function buildSuggestionsView(f, context)
     }
 end
 
-local function createGrid(f, context, kwItems, pfx, fc)
+local function createGrid(f, context, kwItems, pfx, fc, actionFn)
     local bind = LrView.bind
     local columnItems = { spacing = 0 }
     local kwdIX = 1
-    local props = LrBinding.makePropertyTable(fc)
+    local props = context.props
     local CELL_WIDTH = (DIALOG_WIDTH / 3) - 3
     
-    for i, text in ipairs(kwItems) do
-      props[pfx .. i] = text
-    end
+
     columnItems[#columnItems + 1] = f:separator { fill_horizontal = 1 }
     for i = 1, 3 do
         local rowItems = { spacing = 0 }
@@ -408,8 +406,13 @@ local function createGrid(f, context, kwItems, pfx, fc)
                     }),
                     width = CELL_WIDTH - 2,
                     alignment = 'center',
+                    mouse_down = function()
+                      if props[cellKey] then 
+                        actionFn(props[cellKey])
+                      end
+                    end
                 },
-                f:spacer { fill_vertical = 1 }
+                f:spacer { fill_vertical = 1 },
             }
 
             rowItems[#rowItems + 1] = f:separator { fill_vertical = 1 }
@@ -427,11 +430,21 @@ end
  
 local function buildRecentView(f, context, fc)
     local props = context.props
+    local kwItems = RecentlyUsed.getNames(context.recent)
+    local pfx = "recent_kwd_"
+
+    for i, text in ipairs(kwItems) do
+      props[pfx .. i] = text
+    end
 
     return f:view {
         width = DIALOG_WIDTH,
         height = 26,
-        createGrid(f, context, RecentlyUsed.getNames(context.recent), "recent_", fc)
+        createGrid(f, context, kwItems, pfx, fc, 
+                   function(kwd) 
+                      LrDialogs.message('Recent clicked, kwd: ' .. kwd)
+                   end
+        )
     }
 end
 
