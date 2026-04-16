@@ -378,51 +378,57 @@ local function buildSuggestionsView(f, context)
         },
     }
 end
+
+local function createGrid(f, context, kwItems, pfx, fc)
+    local bind = LrView.bind
+    local columnItems = { spacing = 0 }
+    local kwdIX = 1
+    local props = LrBinding.makePropertyTable(fc)
+    local CELL_WIDTH = DIALOG_WIDTH / 3
+    
+    for i, text in ipairs(kwItems) do
+      props[pfx .. i] = text
+    end
+
+    for i = 1, 3 do
+        local rowItems = { spacing = 0 }
+        
+        for j = 1, 3 do
+            local cellKey = pfx .. kwdIX
+            rowItems[#rowItems + 1] = f:static_text {
+                title = LrView.bind({
+                   bind_to_object = props,
+                   key = cellKey
+                }),
+                width = CELL_WIDTH,
+                height = 30,
+                alignment = 'center',
+                vertical_alignment = 'center',
+            }
+            if j < 3 then
+              rowItems[#rowItems + 1] = f:separator { fill_vertical = 1 }
+            end
+
+            kwdIX = kwdIX + 1
+        end
+        
+        -- Add the row to the main grid container
+        columnItems[#columnItems + 1] = f:row (rowItems)
+        if i < 3 then
+          columnItems[#columnItems + 1] = f:separator { fill_horizontal = 1 }
+        end
+    end
+
+    return f:column(columnItems)
+end
  
-local function buildRecentView(f, context)
+local function buildRecentView(f, context, fc)
     local props = context.props
-    local children = {}
 
-    for _, name in ipairs(RecentlyUsed.getNames(context.recent)) do
-        children[#children + 1] = f:push_button {
-            title = name,
-            action = function()
-                local idx = #props.rows + 1
-
-                context.rows[idx].keyword = name
-                context.rows[idx].keywordRef = KeywordService.findKeywordByName(name)
-                RecentlyUsed.bump(context.recent, name)
-                PrefsService.saveRecent(context.toolkitId, RecentlyUsed.exportItems(context.recent))
-                props.recentVersion = (props.recentVersion or 0) + 1
-                syncRowsToProps(context)
-
-                -- Mode 2 (already in create row) and Mode 1 (just created row):
-                -- treat recent-click like accepted suggestion.
-                applyKeywordToSelection(context, name, { makeReadonly = true })
-            end,
-        }
-    end
-
-    if #children == 0 then
-        children[#children + 1] = f:static_text { title = 'No recent keywords yet' }
-    end
-
-    local recentRowChildren = {}
-    for i = 1, #children do
-        recentRowChildren[#recentRowChildren + 1] = children[i]
-    end
-    recentRowChildren[#recentRowChildren + 1] = f:spacer { fill_horizontal = 1 }
-
-    return f:scrolled_view {
+    return f:view {
         width = DIALOG_WIDTH,
         height = 26,
-        horizontal_scroller = true,
-        vertical_scroller = false,
-        f:row {
-            spacing = f:control_spacing(),
-            fill_horizontal = 1,
-            unpack(recentRowChildren),
-        },
+        createGrid(f, context, RecentlyUsed.getNames(context.recent), "recent_", fc)
     }
 end
 
@@ -533,7 +539,7 @@ function UI.showEditor(context)
                               bind_to = props,
                               transform = function(value, fromModel)
                                   -- value is the current content of props.pendingNewKeyword
-                                  if value and #value > 0 then
+                                  if value and #value > 2 then
                                       return true
                                   else
                                       return false
@@ -582,7 +588,7 @@ function UI.showEditor(context)
                 title = 'Recently Used Keywords',
                 width = DIALOG_WIDTH,
                 fill_horizontal = 1,
-                buildRecentView(f, context),
+                buildRecentView(f, context, fc),
             },
         }
 
