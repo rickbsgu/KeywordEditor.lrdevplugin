@@ -361,7 +361,7 @@ local function buildRecentView(f, context, fc)
         height = 26,
         createGrid(f, context, pfx, fc, 
                    function(kwd) 
-                      LrDialogs.message('Recent clicked, kwd: ' .. kwd)
+                     applyKeywordToSelection(context, kwd, { makeReadonly = true })
                    end
         )
     }
