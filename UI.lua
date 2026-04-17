@@ -47,7 +47,6 @@ local function rowCountKey(i) return 'row_' .. tostring(i) .. '_count' end
 local function rowKeywordKey(i) return 'row_' .. tostring(i) .. '_keyword' end
 local function suggestionTitleKey(i) return 'suggestion_' .. tostring(i) .. '_title' end
 
-
 --[[
   Takes the rows obtained from 'loadRowsFromSelection' and creates
   a 'props' structure from the items. The props are what are used to

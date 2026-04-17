@@ -5,7 +5,7 @@ local LogService = {}
 
 local fh
 
-local function serialize(tbl, seen, indent)
+function LogService.serialize(tbl, seen, indent)
     if type(tbl) ~= "table" then
         return string.format("%q", tostring(tbl))
     end
@@ -21,16 +21,18 @@ local function serialize(tbl, seen, indent)
         (function()
         local key
         if type(k) == "string" then
-            for _, v in ipairs {"_parent", "_children"} do
+        --[[
+            for _, v in ipairs {"_parent"} do
               local i, j = string.find(k, v)
               if i == 1 then return end
             end
+        ]]
 
             key = string.format("[%q]", k)
         else
             key = "[" .. tostring(k) .. "]"
         end
-        result = result .. nextIndent .. key .. " = " .. serialize(v, seen, nextIndent) .. ",\n"
+        result = result .. nextIndent .. key .. " = " .. LogService.serialize(v, seen, nextIndent) .. ",\n"
         end)()
     end
     return result .. indent .. "}"
@@ -55,7 +57,7 @@ function LogService.append(message)
     if type(message) ~= "table" then
         outStr = string.format("%q", tostring(message)) .. "\n"
     else
-        outStr = serialize(message)
+        outStr = logService.serialize(message)
     end
     local fh = io.open(logPath, 'a')
     fh:write(outStr)

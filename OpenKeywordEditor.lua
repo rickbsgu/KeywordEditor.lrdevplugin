@@ -15,6 +15,7 @@ end
 LrTasks.startAsyncTask(function()
     LogService.open()
     LogService.append("starting the plugin")
+    LogService.append("SDK Version: " .. LrApplication.versionString())
     local catalog = LrApplication.activeCatalog()
     if not catalog then
         LogService.append('No active catalog')

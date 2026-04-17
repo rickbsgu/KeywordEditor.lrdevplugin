@@ -1,5 +1,4 @@
 local LrApplication = import 'LrApplication'
-local LrDialogs = import 'LrDialogs'
 
 local KeywordService = {}
 
