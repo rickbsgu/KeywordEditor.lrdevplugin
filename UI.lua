@@ -20,7 +20,7 @@ local KEYWORD_LIST_BG = LrColor(0.94, 0.94, 0.94)
 local DIALOG_WIDTH = 320
 local ROW_SPACING = 2
 local ROW_COUNT_WIDTH_PX = 30
-local ROW_KEYWORD_WIDTH_PX = 115
+local ROW_KEYWORD_WIDTH_PX = 200
 local ROW_DELETE_WIDTH_PX = 30
 local SHOW_LAYOUT_FRAMES = true
 local FRAME_COUNT_BG = LrColor(0.97, 0.90, 0.90)
@@ -28,6 +28,7 @@ local FRAME_KEYWORD_BG = LrColor(0.90, 0.95, 0.98)
 local FRAME_DELETE_BG = LrColor(0.92, 0.97, 0.90)
 local UI_UPDATE_NUMBER = 14
 local SUGGESTIONS_PFX = 'suggestions_pfx_'
+local RECENTLY_USED_PFX = 'recently_used_pfx_'
 
 local function trim(s)
     if not s then return '' end
@@ -65,6 +66,15 @@ local function syncRowsToProps(context)
 
     props.rows = context.rows
     props.rowCount = #props.rows
+end
+
+local function refreshRecentlyUsed(context)
+    local props = context.props
+    local kwItems = RecentlyUsed.getNames(context.recent)
+
+    for i, text in ipairs(kwItems) do
+      props[RECENTLY_USED_PFX .. i] = text
+    end
 end
 
 local function refreshSuggestions(context)
@@ -117,10 +127,8 @@ local function applyKeywordToSelection(context, keywordName, opts)
             end
         end
 
-        if opts.makeReadonly then
-            context.props.suggestionsDismissed = false
-            refreshSuggestions(context)
-        end
+        refreshRecentlyUsed(context)
+        refreshSuggestions(context)
     end)
 end
 
@@ -239,6 +247,7 @@ local function buildRowsView(f, context)
                         title = bind(rowCountKey(ix)),
                         alignment = 'right',
                     },
+                    f:spacer { width = 30 },
                     f:static_text {
                         width = ROW_KEYWORD_WIDTH_PX,
                         title = bind(rowKeywordKey(ix)),
@@ -347,20 +356,12 @@ end
   Build the Recents view
 ]]
 local function buildRecentView(f, context, fc)
-    local props = context.props
-    local kwItems = RecentlyUsed.getNames(context.recent)
-    local pfx = "recent_kwd_"
-
-    for i, text in ipairs(kwItems) do
-      props[pfx .. i] = text
-    end
-
     return f:view {
         width = DIALOG_WIDTH,
         height = 26,
-        createGrid(f, context, pfx, fc, 
+        createGrid(f, context, RECENTLY_USED_PFX, fc, 
                    function(kwd) 
-                     applyKeywordToSelection(context, kwd, { makeReadonly = true })
+                     applyKeywordToSelection(context, kwd)
                    end
         )
     }
@@ -375,7 +376,7 @@ function UI.showEditor(context)
 
         context.recent = RecentlyUsed.new(10)
         context.toolkitId = context.toolkitId or 'com.gb.keywordeditor.dev2'
-        RecentlyUsed.loadInto(context.recent, PrefsService.loadRecent(context.toolkitId))
+        RecentlyUsed.loadInto(context, PrefsService.loadRecent(context.toolkitId))
         context.allKeywordNames = KeywordService.getAllKeywordNames(context.catalog)
         LogService.append(string.format('showEditor: loaded %d keyword names', context.allKeywordNames and #context.allKeywordNames or 0))
 
@@ -461,7 +462,7 @@ function UI.showEditor(context)
                       },
                       f:edit_field {
                           value = LrView.bind('pendingNewKeyword'),
-                          width = math.floor(ROW_KEYWORD_WIDTH_PX * 1.5),
+                          width = 172,
                           immediate = true,
                           focus = true,
                       },
@@ -492,7 +493,7 @@ function UI.showEditor(context)
                                   props.showCreateField = false
                                   syncRowsToProps(context)
                                   refreshSuggestions(context)
-                                  applyKeywordToSelection(context, v, { makeReadonly = true })
+                                  applyKeywordToSelection(context, v)
                               end
                           end,
                       },
@@ -524,6 +525,8 @@ function UI.showEditor(context)
                 buildRecentView(f, context, fc),
             },
         }
+
+        refreshRecentlyUsed(context)
 
         local result = LrDialogs.presentModalDialog {
             title = 'GB Keyword Editor',

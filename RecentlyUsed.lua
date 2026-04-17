@@ -1,3 +1,5 @@
+local KeywordService = require('KeywordService')
+
 local RecentlyUsed = {}
 
 function RecentlyUsed.new(maxItems)
@@ -7,7 +9,8 @@ function RecentlyUsed.new(maxItems)
     }
 end
 
-function RecentlyUsed.loadInto(model, items)
+function RecentlyUsed.loadInto(context, items)
+    local model = context.recent
     model.items = {}
     if type(items) ~= 'table' then return end
 
@@ -16,7 +19,11 @@ function RecentlyUsed.loadInto(model, items)
             local name = item.name
             local clicks = tonumber(item.clicks) or 0
             if name ~= '' then
-                model.items[#model.items + 1] = { name = name, clicks = clicks }
+                local kw = KeywordService.findKeywordByName(context.catalog, name)
+                if (kw) then
+                  model.items[#model.items + 1] = { name = name, clicks = clicks }
+                  -- only load keywords that exist in catalog
+                end
             end
         end
     end
