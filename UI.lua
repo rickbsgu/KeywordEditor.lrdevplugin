@@ -129,40 +129,8 @@ local function applyKeywordToSelection(context, keywordName, opts)
 
         refreshRecentlyUsed(context)
         refreshSuggestions(context)
-    end)
-end
-
-local function addRow(context)
-    if not context.rows then context.rows = {} end
-    local props = context.props
-    props.suggestionsDismissed = false
-    -- Show modal dialog for new keyword entry
-    local f = LrView.osFactory()
-    local keywordProps = LrBinding.makePropertyTable()
-    keywordProps.newKeyword = ''
-    local result = LrDialogs.presentModalDialog {
-        title = 'Create Keyword',
-        contents = f:column {
-            spacing = f:control_spacing(),
-            f:static_text { title = 'Enter new keyword:' },
-            f:edit_field {
-                value = LrView.bind('newKeyword'),
-                width_in_chars = 30,
-            },
-        },
-        bind_to_object = keywordProps,
-        actionVerb = 'OK',
-        otherVerb = 'Cancel',
-    }
-    if result == 'ok' and trim(keywordProps.newKeyword) ~= '' then
-        context.rows[#context.rows + 1] = {
-            count = '',
-            keyword = trim(keywordProps.newKeyword),
-            keywordRef = nil,
-        }
         syncRowsToProps(context)
-        refreshSuggestions(context)
-    end
+    end)
 end
 
 local function deleteRow(context, index)
@@ -175,8 +143,8 @@ local function deleteRow(context, index)
     table.remove(rows, index)
     context.rows = rows
     context.props.suggestionsDismissed = false
-    syncRowsToProps(context)
     refreshSuggestions(context)
+    syncRowsToProps(context)
 
     LrTasks.startAsyncTask(function()
         local kw = row.keywordRef
@@ -220,8 +188,8 @@ loadRowsFromSelection = function(context)
     end
 
     context.rows = rows
-    syncRowsToProps(context)
     refreshSuggestions(context)
+    syncRowsToProps(context)
 end
 
 --[[ 
@@ -413,7 +381,6 @@ function UI.showEditor(context)
         props:addObserver('pendingNewKeyword', function()
           refreshSuggestions(context)
         end)
-
 --[[
     End Create Observers
 ]]
@@ -491,8 +458,6 @@ function UI.showEditor(context)
                                   }
                                   props.pendingNewKeyword = ''
                                   props.showCreateField = false
-                                  syncRowsToProps(context)
-                                  refreshSuggestions(context)
                                   applyKeywordToSelection(context, v)
                               end
                           end,
