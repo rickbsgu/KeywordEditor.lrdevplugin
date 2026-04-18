@@ -1,0 +1,44 @@
+# Lightroom Keyword Editor Plugin - Developer Notes
+
+Frankly, the _Lightroom_ plugin development environent is a hostile enviornment.  You don't have access to a debugger, can't inspect variable values, errors often happen silently or present an error dialog you don't understand, or kill the plugin outright and you don't know where it happened or why.
+
+## Run Lightroom from the Commandline
+
+For me, the first line of defense was to run the application from the commandline.  _Lightroom_ actually spews out a _bunch_ of information to stdout/stderr, but you never see it if you launch it with a click.
+
+Most invaluably, it prints out a traceback if your plugin crashes.  That traceback provides much more accurate information than any popup error dialog.
+
+On MacOS:
+> cd to `/Applications/Adobe Lightroom Classic/Adobe Lightroom Classic.app`  
+>   
+> To invoke: `./Contents/MacOS/Adobe\ Lightroom\ Classic`
+
+I run it from an extra terminal instance in _VSCode_.
+
+## LrDialogs.message()
+
+The next debugging tool is good old dialog/alert implementations &mdash; the UI equivalent of print statements.  (Actually, since you're running from the commandline, you can use print statements. The caveat is you have to be able to distinguish your print statements from the proliferated messages that come out during normal operations.)
+
+## Logging
+
+The _Lightroom_ SDK has a logging service.  Frankly, I don't use it because I don't like fishing through the directory structure to read it.
+
+The AI created a logging service module that prints to a file location of your choice, in my case: ./logs/log.txt in the project heirarchy.  Then I can simply open it in _VSCode_ and read it.  Plus it automatically updates every time it's written to.
+
+## Table Dumps
+
+Lua/_Lightroom SDK_ don't have native table (structure) dump facilities.  You have to provide your own (or use _Lightroom's_ logging service, which can dump tables.)
+
+In the _LogService.lua_ module, there is a 'serialize' function.  You can use that to either append the output to the log (via the 'append' function, or output it to a messages dialog.
+
+## Rerunning
+
+... is a royal _PITA_.  You have to click the _File/Plugin-Manager -> Reload Plugin_ sequence every time you make a change, and then invoke the plugin from the _Library/Plugin Extras/Open GB Keyword Editor_ menu.
+
+_Every time you make a change!_
+
+If you add or remove a source file, you likely need to remove it entirely and then re-add it. _Lightroom_ often doesn't load the changes.  It can be worthwhile to add a temporary "build no." readout to the dialog somewhere, and update it after every change to convince yourself the plugin is getting loaded.
+
+It gets stultifying after a while, especially if you're using an AI agent &mdash; it reduces you to a multi-click robot.
+
+I haven't found a way to shorten the process, certainly not the first part.  For the second part, you _may_ be able to define a system-level hot-key to invoke the plugin.  _Lightroom_ doesn't provide a way to assign a hot-key to invoke a plugin.
